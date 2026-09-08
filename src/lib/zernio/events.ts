@@ -1,10 +1,11 @@
-import { isMuAccount } from "@/config/zernio";
+import { isMuAccount, ZERNIO } from "@/config/zernio";
 import { logEvent } from "@/lib/events";
 import type { MuClient } from "@/lib/supabase";
 import {
   asRecord,
   asString,
   findPostUrl,
+  getPost,
   normalizePost,
   type ZernioPost,
 } from "@/lib/zernio/client";
@@ -57,15 +58,39 @@ export async function handleZernioEvent(
         const result = await applyPost(supabase, post, "webhook");
         error = result.applied ? null : result.reason;
       } else if (kind === "post.failed" || kind === "post.platform.failed") {
-        await applyPost(supabase, post, "webhook");
-        await alertPostFailed(
-          supabase,
-          post,
-          kind,
-          asString(asRecord(payload.platform).error) ??
-            asString(asRecord(payload.platform).errorMessage) ??
-            asString(payload.error),
-        );
+        /**
+         * 2026-09-08, Ep017's Facebook reel: Zernio emitted `post.failed` at
+         * 22:12:31Z and published the very same post at 22:12:47Z — its own
+         * retry succeeded sixteen seconds later. A failed event is therefore a
+         * claim to be checked, not a fact: re-read the post from the API, and
+         * only alarm when no leg of it is published. If the re-read shows a
+         * published leg, record it like any publish (which also queues the
+         * YouTube finisher when that is the leg).
+         */
+        const fresh = await recheckFailed(post.id);
+        if (fresh && fresh.platforms.some((leg) => leg.status === "published")) {
+          const result = await applyPost(supabase, fresh, "webhook");
+          error = result.applied ? null : result.reason;
+          await logEvent(supabase, {
+            level: "info",
+            area: "webhook",
+            message:
+              `${fresh.episode ?? post.episode ?? "?"}: Zernio reported ${kind} for post ${post.id} ` +
+              `but the post reads back as published — no alarm.`,
+            ep: fresh.episode ?? post.episode,
+            detail: { zernioPostId: post.id, event: kind },
+          });
+        } else {
+          await applyPost(supabase, fresh ?? post, "webhook");
+          await alertPostFailed(
+            supabase,
+            fresh ?? post,
+            kind,
+            asString(asRecord(payload.platform).error) ??
+              asString(asRecord(payload.platform).errorMessage) ??
+              asString(payload.error),
+          );
+        }
       } else {
         // post.scheduled, webhook.test and the rest: recorded, not acted on.
         error = null;
@@ -125,4 +150,20 @@ function postFromPayload(payload: Record<string, unknown>): ZernioPost | null {
   }
 
   return post;
+}
+
+/**
+ * Re-reads a post from Zernio after a failed event. Waits a moment first —
+ * the Ep017 retry landed 16 s after the failed event — then asks once. Any
+ * error here (no API key, Zernio down) yields null and the caller falls back
+ * to the payload, so a re-check can never suppress a real failure by accident.
+ */
+async function recheckFailed(postId: string): Promise<ZernioPost | null> {
+  if (!process.env.ZERNIO_API_KEY) return null;
+  await new Promise((resolve) => setTimeout(resolve, ZERNIO.failedRecheckDelayMs));
+  try {
+    return await getPost(postId);
+  } catch {
+    return null;
+  }
 }

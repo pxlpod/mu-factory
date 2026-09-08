@@ -62,6 +62,14 @@ export const ZERNIO = {
   },
 
   requestTimeoutMs: 30_000,
+
+  /**
+   * How long to wait before re-reading a post that Zernio reported as failed.
+   * Ep017 (2026-09-08): Zernio's own retry published the post 16 s after the
+   * failed event; 25 s covers that with margin and stays inside the webhook
+   * route's budget.
+   */
+  failedRecheckDelayMs: 25_000,
 } as const;
 
 export type ZernioPlatform = keyof typeof ZERNIO.accountIds;

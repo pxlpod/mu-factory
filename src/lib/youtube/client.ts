@@ -242,19 +242,69 @@ export async function insertBlankCaption(
 // Thumbnails
 // ---------------------------------------------------------------------------
 
-/** `thumbnails.set` with the cover's own bytes. Never re-encoded here or anywhere. */
+/**
+ * `thumbnails.set` with the cover's own bytes. Never re-encoded here or anywhere.
+ *
+ * 2026-09-08, Ep017 (the first live run): sent through googleapis' multipart
+ * stream path the call returned 200, yet YouTube then served its grey
+ * "processing" placeholder for hours — the bytes did not survive the trip. So
+ * the thumbnail goes up as a SIMPLE UPLOAD (`uploadType=media`, one binary
+ * body, Content-Length set) over plain fetch with the same OAuth token. No
+ * multipart, no stream, nothing for a transport layer to mangle. The response
+ * is checked for the thumbnail set it echoes back; anything else throws.
+ */
 export async function setThumbnail(
   videoId: string,
   jpeg: Buffer,
   supabase?: MuClient,
 ): Promise<void> {
-  const youtube = await api(supabase);
-  await call("thumbnails.set", () =>
-    youtube.thumbnails.set({
-      videoId,
-      media: { mimeType: "image/jpeg", body: Readable.from([jpeg]) },
-    }),
-  );
+  const { client } = await authorizedClient(supabase);
+  const { token } = await call("thumbnails.set (token)", () => client.getAccessToken());
+  if (!token) throw new YouTubeError("thumbnails.set: no access token available");
+
+  const url =
+    "https://www.googleapis.com/upload/youtube/v3/thumbnails/set" +
+    `?videoId=${encodeURIComponent(videoId)}&uploadType=media`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "image/jpeg",
+      "Content-Length": String(jpeg.length),
+    },
+    body: new Uint8Array(jpeg),
+    signal: AbortSignal.timeout(YOUTUBE.uploadTimeoutMs),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let reason: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { error?: { errors?: Array<{ reason?: string }> } };
+      reason = parsed.error?.errors?.[0]?.reason;
+    } catch {
+      /* not JSON */
+    }
+    if (reason === "invalid_grant" || res.status === 401) {
+      throw new YoutubeDisconnectedError(
+        "YouTube refused the access token during thumbnails.set. Open /status and press Connect Google.",
+      );
+    }
+    throw new YouTubeError(
+      `YouTube thumbnails.set failed: ${res.status} ${text.slice(0, 300)}`,
+      res.status,
+      reason,
+    );
+  }
+  let echoed: { items?: Array<{ default?: { url?: string } }> } = {};
+  try {
+    echoed = JSON.parse(text) as typeof echoed;
+  } catch {
+    throw new YouTubeError(`thumbnails.set returned unparseable JSON: ${text.slice(0, 200)}`);
+  }
+  if (!echoed.items?.[0]?.default?.url) {
+    throw new YouTubeError(`thumbnails.set returned no thumbnail set: ${text.slice(0, 200)}`);
+  }
 }
 
 /**

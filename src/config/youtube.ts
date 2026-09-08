@@ -90,6 +90,9 @@ export const YOUTUBE = {
 
   /** Wall-clock ceiling for downloading a thumbnail from YouTube's CDN. */
   thumbnailFetchTimeoutMs: 20_000,
+
+  /** Wall-clock ceiling for the simple-upload thumbnails.set call (≤ 2 MB body). */
+  uploadTimeoutMs: 60_000,
 } as const;
 
 export type FinishState =
