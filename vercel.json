@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/youtube/sweep",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/health",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
