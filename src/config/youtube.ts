@@ -93,6 +93,13 @@ export const YOUTUBE = {
 
   /** Wall-clock ceiling for the simple-upload thumbnails.set call (≤ 2 MB body). */
   uploadTimeoutMs: 60_000,
+
+  /**
+   * Width ÷ height of MU's covers (1620×2880). The verifier cuts this aspect
+   * out of the centre of whatever YouTube serves before hashing, because
+   * YouTube pads a portrait thumbnail into 16:9 with a blurred copy of itself.
+   */
+  coverAspect: 9 / 16,
 } as const;
 
 export type FinishState =

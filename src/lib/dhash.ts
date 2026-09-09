@@ -16,11 +16,15 @@ import { YOUTUBE } from "@/config/youtube";
  * here has a path or a `toFile`, and nothing here touches the cover that goes
  * to YouTube — that is sent byte for byte.
  *
- * LETTERBOX TRIM. YouTube pads a 9:16 Short's thumbnail into a 16:9 (`maxres`)
- * or 4:3 (`high`) frame with black bars. Hashing that against the raw 9:16
- * cover would fail every time, so both sides are trimmed of uniform borders
- * first (`sharp.trim`). Trimming the cover is a no-op unless it has a border
- * of its own, in which case the same border is trimmed from both.
+ * PORTRAIT CENTRE CROP (learned on Ep017, 2026-09-08, the first live run).
+ * YouTube serves a 9:16 Short's custom thumbnail inside a 16:9 `maxres`
+ * (1280×720) frame with the tile centred and a BLURRED, STRETCHED COPY OF THE
+ * TILE as the side padding — not black bars. A trim of uniform borders does
+ * nothing to that, and hashing the whole frame put the real tile 37 bits from
+ * itself. So: when the image is wider than the cover's aspect, the centre
+ * region with the cover's aspect (9:16) is cut out first, and only that is
+ * hashed. Black-bar padding (`high`, 4:3, older renders) is handled by the
+ * same crop. A portrait input (the cover itself) is left whole.
  */
 
 export async function dhash(image: Buffer): Promise<string> {
@@ -28,10 +32,19 @@ export async function dhash(image: Buffer): Promise<string> {
 
   let pipeline = sharp(image, { failOn: "none" }).rotate();
   try {
-    // Trim uniform borders. Falls back to the untrimmed image if trim leaves
-    // nothing (a solid-colour input) — sharp throws in that case.
-    const trimmed = await pipeline.clone().trim({ threshold: 16 }).toBuffer();
-    pipeline = sharp(trimmed, { failOn: "none" });
+    const meta = await pipeline.clone().metadata();
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    const target = YOUTUBE.coverAspect; // width / height of the cover, 9/16
+    if (w > 0 && h > 0 && w / h > target * 1.05) {
+      const cropW = Math.round(h * target);
+      const left = Math.round((w - cropW) / 2);
+      const cropped = await pipeline
+        .clone()
+        .extract({ left, top: 0, width: cropW, height: h })
+        .toBuffer();
+      pipeline = sharp(cropped, { failOn: "none" });
+    }
   } catch {
     pipeline = sharp(image, { failOn: "none" }).rotate();
   }
