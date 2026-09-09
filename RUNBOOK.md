@@ -89,10 +89,12 @@ Zernio dashboard → **Settings → API** → create or copy a key →
 4. **Do not** add a `functions.memory` block to `vercel.json` — the project
    is on Active CPU billing, where Vercel ignores it. Memory is set under the
    project's Function settings in the dashboard if it is ever needed.
-5. **Function memory for the grid pass.** `/api/youtube/grid` launches a
-   Chromium; give the project's functions at least **1 GB** under Settings →
-   Functions if the default is lower. Symptom of too little: the `youtube.grid`
-   heartbeat says `failed` with a browser launch error, or the run just dies.
+5. **Function CPU for the grid pass.** `/api/youtube/grid` launches a
+   Chromium. Settings → Functions → Function CPU offers **Standard** (1 vCPU,
+   2 GB) and **Performance** (2 vCPUs, 4 GB); Standard is enough and is what
+   the project runs on (2026-09-09). Move to Performance only if the
+   `youtube.grid` heartbeat reports a browser launch failure or the run budget
+   keeps stopping rows short.
 
 ### 7. First visit to `/status`
 
@@ -201,7 +203,7 @@ land on that episode's Publishing item; the rest land on **MU Factory alerts**.
 | `studio.session_expired` | Studio no longer accepts the stored session (or none is stored) | On the Mac: `node studio_bot.mjs login && node studio_bot.mjs export`. The next grid pass resolves the alert by itself. No video attempt was used up. |
 | `zernio.post_failed:<post>` | Zernio could not publish | Open the post in Zernio; the reason is there. |
 | `cron.dead:youtube.sweep` | No sweep for 45 minutes | Vercel → the project → **Cron Jobs**. Redeploy if they are missing. |
-| `cron.dead:youtube.grid` | No grid pass for 45 minutes | Same place. If the sweep is alive and only the grid is dead, check the function's memory (step 6, item 5) and its logs for a browser launch error. |
+| `cron.dead:youtube.grid` | No grid pass for 45 minutes | Same place. If the sweep is alive and only the grid is dead, check the function's CPU setting (step 6, item 5) and its logs for a browser launch error. |
 | `config.invalid:<probe>` | A dependency check failed | `/status` — the red line names it. |
 
 A cover that simply is not in Drive yet is **not** an alert. The row waits,

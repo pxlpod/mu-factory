@@ -148,8 +148,8 @@ language, read-back verification.
 - **`@sparticuz/chromium` + `playwright-core`,** both in
   `serverExternalPackages`, with the Chromium binary named in
   `outputFileTracingIncludes` for the grid route only. The binary inflates
-  into /tmp once per warm instance; graphics are off. Function memory is set
-  in the dashboard (≥ 1 GB), never in `vercel.json`.
+  into /tmp once per warm instance; graphics are off. Function CPU is set in
+  the dashboard (Standard, 1 vCPU / 2 GB, is enough), never in `vercel.json`.
 
 ## Checking things by hand (Christopher only)
 
