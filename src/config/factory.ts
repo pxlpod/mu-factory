@@ -47,6 +47,17 @@ export const FILE_NAMES = {
 /** `media.kind` values, matching the CHECK constraint in the first migration. */
 export type MediaKind = "final" | "final_tt" | "cover_ig" | "cover_yt" | "cover_fb";
 
+/**
+ * `platform_posts.kind` values, matching the CHECK constraint (widened to
+ * `story` in the 2026-09-09 migration). Zernio carries it as
+ * `post.metadata.kind`, set by the Mac pipeline when it schedules: `video` is
+ * the Short, `text` the Facebook text-lane post, `story` an Instagram or
+ * Facebook story. A value not in this list is ignored and the row keeps
+ * `video`, so a typo in metadata cannot fail an upsert on a published post.
+ */
+export const POST_KINDS = ["video", "text", "story"] as const;
+export type PostKind = (typeof POST_KINDS)[number];
+
 // ---------------------------------------------------------------------------
 // Google Drive
 // ---------------------------------------------------------------------------

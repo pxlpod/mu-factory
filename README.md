@@ -17,7 +17,7 @@ both back to prove it** — triggered by Zernio's webhook, with a poll fallback.
 
 **Plus the Shorts-grid thumbnail (2026-09-09).** The Data API sets only the
 classic thumbnail; the card on the channel's Shorts tab reads a second image
-that only YouTube Studio can set. A separate pass drives Studio in a headless
+(`i.ytimg.com/vi/<videoId>/sardefault.jpg`) that only YouTube Studio can set. A separate pass drives Studio in a headless
 browser with a session Christopher exports once from his Mac, uploads the same
 cover, and then **reads the public grid back** and hashes the card. Nothing
 here calls that done because Save was pressed.
@@ -138,7 +138,9 @@ and nothing else runs) → answer 200 → work in `after()`:
 - Any account id not in MU's four → row marked processed with `not MU`, stop.
 - Resolve the episode: `post.metadata.episode` if valid, else an existing
   `platform_posts` row for that Zernio post id, else null.
-- Upsert one `platform_posts` row per platform leg (`source: webhook`).
+- Upsert one `platform_posts` row per platform leg (`source: webhook`), with
+  `kind` from `post.metadata.kind` (`video` | `text` | `story`; anything else
+  leaves the row's kind alone, defaulting to `video`).
 - A published YouTube leg with a video id → `youtube_finish` row, `pending`.
   Unknown episode → still created, `wait-for-human`, alert
   `youtube.unknown_episode:<video_id>`.

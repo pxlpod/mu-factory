@@ -6,6 +6,7 @@ The `mindless-mu` Supabase project (ref `bfvrekckhuifncagccqx`) gets its tables 
 |---|---|---|
 | 1 | `20260908150000_initial_schema.sql` | The `mu` schema, its ten tables, the security lockdown, the private `mu-media` bucket, and the line that lets the app see the schema |
 | 2 | `20260909030000_shorts_grid_slot.sql` | Six columns on `youtube_finish` for the Shorts-grid thumbnail (set, verified, distance, attempts, next look, last error), their descriptions, and a rule that "verified" always carries the distance that verified it |
+| 3 | `20260909031000_platform_posts_kind_story.sql` | Lets `platform_posts.kind` hold `story` as well as `video` and `text` |
 
 The long number is a UTC timestamp. It is kept in the filename so this folder and the database always agree on what has been applied, and so the Supabase CLI could take over later without renaming anything.
 
@@ -89,6 +90,14 @@ One rule comes with it: a row cannot say the grid thumbnail is verified
 without also recording how close the public card was to the cover. Rows
 verified before the rule existed are left as they are (`NOT VALID`); every
 row written from now on obeys it.
+
+## What the third file does
+
+Each post row says what kind of post it is: `video` (the Short), `text` (the
+Facebook text-lane post) or, from now on, `story` (an Instagram or Facebook
+story). The Mac labels every post it schedules with that kind, and the app now
+copies the label onto the row. Without this file the database would refuse a
+story post.
 
 ---
 

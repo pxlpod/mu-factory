@@ -1,4 +1,4 @@
-import type { MediaKind } from "@/config/factory";
+import type { MediaKind, PostKind } from "@/config/factory";
 import type { FinishState } from "@/config/youtube";
 import type { ZernioPlatform } from "@/config/zernio";
 
@@ -94,7 +94,7 @@ export interface PlatformPostRow {
   id: string;
   ep: string | null;
   platform: ZernioPlatform;
-  kind: "video" | "text";
+  kind: PostKind;
   zernio_post_id: string | null;
   zernio_account_id: string | null;
   /** The platform's own id — for YouTube, the video id. */

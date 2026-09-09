@@ -1,5 +1,5 @@
 import { ALERT_CONDITIONS } from "@/config/alerts";
-import { EPISODE_PATTERN } from "@/config/factory";
+import { EPISODE_PATTERN, type PostKind } from "@/config/factory";
 import {
   MU_ACCOUNT_PLATFORM,
   ZERNIO,
@@ -103,6 +103,7 @@ export async function applyPost(
     const row = await upsertPlatformPost(supabase, {
       ep,
       platform,
+      kind: post.kind ?? undefined,
       zernioPostId: post.id,
       zernioAccountId: leg.accountId,
       platformPostId: leg.platformPostId,
@@ -227,7 +228,8 @@ export async function upsertPlatformPost(
   input: {
     ep: string | null;
     platform: ZernioPlatform;
-    kind?: "video" | "text";
+    /** From `post.metadata.kind`. Absent → keep what the row has, else `video`. */
+    kind?: PostKind;
     zernioPostId: string;
     zernioAccountId: string | null;
     platformPostId: string | null;
