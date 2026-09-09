@@ -8,6 +8,7 @@ import {
   serviceAccountEmail,
 } from "@/lib/drive";
 import { loadYoutubeCredentials } from "@/lib/google/credentials";
+import { describeStudioSession } from "@/lib/studio";
 import { checkBoard } from "@/lib/monday";
 import { createServiceClient } from "@/lib/supabase";
 import { probeProfile } from "@/lib/zernio/client";
@@ -59,6 +60,7 @@ export async function runConfigCheck(): Promise<CheckLine[]> {
   lines.push(...(await driveLines()));
   lines.push(...(await mondayLines()));
   lines.push(await youtubeLine());
+  lines.push(await studioLine());
   lines.push(await zernioLine());
 
   return lines;
@@ -217,6 +219,43 @@ async function youtubeLine(): Promise<CheckLine> {
         };
   } catch (error) {
     return { label: "YouTube", ok: false, detail: describe(error) };
+  }
+}
+
+/**
+ * The YouTube Studio session that sets the Shorts-grid thumbnail.
+ *
+ * Read from the stored record — never by opening Studio, which is the grid
+ * pass's job and the only honest test. What this line can say is whether a
+ * session is stored at all, when the Mac exported it, when a run last wrote
+ * the rotated cookies back, and when the earliest cookie lapses. An expired
+ * session shows up as the `studio.session_expired` alert above, not here.
+ */
+async function studioLine(): Promise<CheckLine> {
+  const label = "YouTube Studio session";
+  try {
+    const session = await describeStudioSession();
+    if (!session) {
+      return {
+        label,
+        ok: false,
+        detail:
+          `Not stored. Shorts-grid thumbnails cannot be set until Christopher runs ` +
+          `studio_bot.mjs login && export on the Mac.`,
+      };
+    }
+    return {
+      label,
+      ok: true,
+      detail:
+        `${session.cookies} cookies` +
+        (session.exported_at ? `, exported ${session.exported_at.slice(0, 16)}Z` : "") +
+        (session.refreshed_at ? `, refreshed ${session.refreshed_at.slice(0, 16)}Z` : ", never refreshed by a run") +
+        (session.earliest_expiry ? `, earliest cookie expiry ${session.earliest_expiry.slice(0, 10)}` : "") +
+        ".",
+    };
+  } catch (error) {
+    return { label, ok: false, detail: describe(error) };
   }
 }
 

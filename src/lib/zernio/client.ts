@@ -1,4 +1,4 @@
-import { EPISODE_PATTERN } from "@/config/factory";
+import { EPISODE_PATTERN, POST_KINDS, type PostKind } from "@/config/factory";
 import { ZERNIO, type ZernioPlatform } from "@/config/zernio";
 
 /**
@@ -89,6 +89,8 @@ export interface ZernioPost {
   id: string;
   /** `metadata.episode` when present and well-formed, else null. */
   episode: string | null;
+  /** `metadata.kind` when present and one of `POST_KINDS`, else null. */
+  kind: PostKind | null;
   scheduledFor: string | null;
   publishedAt: string | null;
   status: string | null;
@@ -112,6 +114,10 @@ export function normalizePost(source: unknown): ZernioPost | null {
   const metadata = asRecord(post.metadata);
   const episodeRaw = asString(metadata.episode);
   const episode = episodeRaw && EPISODE_PATTERN.test(episodeRaw) ? episodeRaw : null;
+  const kindRaw = asString(metadata.kind)?.toLowerCase();
+  const kind = (POST_KINDS as readonly string[]).includes(kindRaw ?? "")
+    ? (kindRaw as PostKind)
+    : null;
 
   const platforms = (Array.isArray(post.platforms) ? post.platforms : [])
     .map((entry) => asRecord(entry))
@@ -129,6 +135,7 @@ export function normalizePost(source: unknown): ZernioPost | null {
   return {
     id,
     episode,
+    kind,
     scheduledFor: asString(post.scheduledFor) ?? asString(post.scheduled_for),
     publishedAt: asString(post.publishedAt) ?? asString(post.published_at),
     status: asString(post.status)?.toLowerCase() ?? null,

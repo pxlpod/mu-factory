@@ -46,6 +46,10 @@ export const ALERT_CONDITIONS = {
   youtubeVerifyFailed: "youtube.verify_failed",
   /** `cover_<Ep>.jpg` is over YouTube's 2 MB cap. Never re-encoded silently. */
   youtubeCoverTooLarge: "youtube.cover_too_large",
+  /** Three Shorts-grid attempts failed, or the grid image never matched. */
+  youtubeGridStuck: "youtube.grid_stuck",
+  /** The exported Studio session no longer signs in; Studio redirects to accounts.google.com. */
+  studioSessionExpired: "studio.session_expired",
   /** Zernio reported a post or platform failure. */
   zernioPostFailed: "zernio.post_failed",
   cronDead: "cron.dead",

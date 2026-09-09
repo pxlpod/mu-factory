@@ -1,4 +1,4 @@
-import type { FinishState } from "@/config/youtube";
+import { STUDIO, type FinishState } from "@/config/youtube";
 import type { MuClient } from "@/lib/supabase";
 import type { YoutubeFinishRow } from "@/types/db";
 
@@ -19,6 +19,15 @@ import type { YoutubeFinishRow } from "@/types/db";
  * `wait-for-human` is the honest terminal for anything this code cannot
  * decide. It always carries `last_error` so /status can say why. Leaving it
  * is a human act — by design, not by omission.
+ *
+ * THE SHORTS GRID SLOT (2026-09-09) IS A SECOND VERIFICATION ON THE SAME ROW
+ * and does not touch `state`: `done` keeps meaning "the classic slot and the
+ * caption track were read back". The grid has its own columns
+ * (`grid_thumbnail_*`, `grid_attempts`, `grid_error`) and its own rule, held
+ * here for the same reason: `grid_thumbnail_verified_at` is written by
+ * `resolveGridVerified` alone, from a distance measured on the PUBLIC grid
+ * card, and never by the code that pressed Save. /status says "done" for a
+ * row only when both slots are verified.
  */
 
 export type FinishPatch = Partial<
@@ -37,6 +46,11 @@ export type FinishPatch = Partial<
     | "next_attempt_at"
     | "last_error"
     | "cover_sha256"
+    | "grid_thumbnail_set_at"
+    | "grid_thumbnail_distance"
+    | "grid_attempts"
+    | "grid_next_attempt_at"
+    | "grid_error"
   >
 >;
 
@@ -116,4 +130,37 @@ export async function resolveDone(
     .eq("platform_post_id", row.platform_post_id);
   if (error) throw new Error(`youtube_finish done failed: ${error.message}`);
   return true;
+}
+
+/**
+ * `grid_thumbnail_verified_at`, if and only if the card the public Shorts grid
+ * serves hashes within the threshold of our cover.
+ *
+ * The distance is recorded either way — a miss on /status should say how far
+ * off it was. Returns false and leaves the verified column alone otherwise.
+ * `grid_thumbnail_verified_at` is not in `FinishPatch`; this is the only writer.
+ */
+export async function resolveGridVerified(
+  supabase: MuClient,
+  row: Pick<YoutubeFinishRow, "platform_post_id">,
+  distance: number,
+): Promise<boolean> {
+  const measured = Number.isFinite(distance) ? distance : null;
+  const verified = measured !== null && measured <= STUDIO.gridMaxDistance;
+
+  const { error } = await supabase
+    .from("youtube_finish")
+    .update(
+      verified
+        ? {
+            grid_thumbnail_distance: measured,
+            grid_thumbnail_verified_at: new Date().toISOString(),
+            grid_error: null,
+            grid_next_attempt_at: null,
+          }
+        : { grid_thumbnail_distance: measured },
+    )
+    .eq("platform_post_id", row.platform_post_id);
+  if (error) throw new Error(`youtube_finish grid update failed: ${error.message}`);
+  return verified;
 }

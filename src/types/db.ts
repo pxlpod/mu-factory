@@ -1,4 +1,4 @@
-import type { MediaKind } from "@/config/factory";
+import type { MediaKind, PostKind } from "@/config/factory";
 import type { FinishState } from "@/config/youtube";
 import type { ZernioPlatform } from "@/config/zernio";
 
@@ -94,7 +94,7 @@ export interface PlatformPostRow {
   id: string;
   ep: string | null;
   platform: ZernioPlatform;
-  kind: "video" | "text";
+  kind: PostKind;
   zernio_post_id: string | null;
   zernio_account_id: string | null;
   /** The platform's own id — for YouTube, the video id. */
@@ -127,6 +127,13 @@ export interface YoutubeFinishRow {
   next_attempt_at: string | null;
   last_error: string | null;
   cover_sha256: string | null;
+  /** The Shorts GRID slot — Studio-only; see `STUDIO` in config/youtube.ts. */
+  grid_thumbnail_set_at: string | null;
+  grid_thumbnail_verified_at: string | null;
+  grid_thumbnail_distance: number | null;
+  grid_attempts: number;
+  grid_next_attempt_at: string | null;
+  grid_error: string | null;
   created_at: string;
   updated_at: string;
 }

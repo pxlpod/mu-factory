@@ -13,7 +13,7 @@ import type { HeartbeatRow } from "@/types/db";
  * asks for (`last_at`, `status`).
  */
 
-export type CronRoute = "youtube.sweep" | "health";
+export type CronRoute = "youtube.sweep" | "youtube.grid" | "health";
 
 export async function beat(
   route: CronRoute,

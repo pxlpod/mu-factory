@@ -1,4 +1,4 @@
-import { YOUTUBE } from "@/config/youtube";
+import { STUDIO, YOUTUBE } from "@/config/youtube";
 
 /**
  * One table for how every operation retries.
@@ -23,7 +23,7 @@ import { YOUTUBE } from "@/config/youtube";
  * when they are reached.
  */
 
-export type Operation = "youtube_finish" | "youtube_verify" | "cover_fetch";
+export type Operation = "youtube_finish" | "youtube_verify" | "youtube_grid" | "cover_fetch";
 
 export interface AttemptPolicy {
   /** Consecutive failures before automatic retrying changes behaviour. */
@@ -66,6 +66,23 @@ export const ATTEMPT_POLICIES: Record<Operation, AttemptPolicy> = {
       "and re-reads. But it must be able to fail: after two hours of the " +
       "thumbnail not matching, the honest state is 'a human should look', not " +
       "'verified because the set call returned 200'.",
+  },
+
+  youtube_grid: {
+    maxAttempts: STUDIO.gridAttempts,
+    atCap: "wait-for-human",
+    retryMs: STUDIO.gridRetryMs,
+    manualRetry:
+      "Open the video in YouTube Studio and check the Shorts-grid thumbnail by eye. " +
+      "If it is right, set grid_thumbnail_verified_at (and the distance) on the row; " +
+      "if not, read grid_error, fix the cause, and set grid_attempts back to 0.",
+    rationale:
+      "The grid slot is set by driving Studio's own page in a browser, and then " +
+      "proved by hashing the card the PUBLIC Shorts grid serves. One attempt is an " +
+      "upload plus two minutes of polling. Three misses means Studio changed its " +
+      "page, the session is bad, or the grid is not taking the image — none of " +
+      "which a fourth identical attempt would tell us. A stale session is its own " +
+      "alert (studio.session_expired) and does not consume an attempt.",
   },
 
   cover_fetch: {

@@ -1,10 +1,12 @@
 # Migrations — what they do and how to run them
 
-**Status: not yet applied.** The `mindless-mu` Supabase project (ref `bfvrekckhuifncagccqx`) is new, and the first file below has to be run once by hand before the app can do anything. This page walks through it. Nothing here needs a terminal.
+The `mindless-mu` Supabase project (ref `bfvrekckhuifncagccqx`) gets its tables from the files below, run once each by hand, in order. This page walks through it. Nothing here needs a terminal.
 
 | Order | File | What it does |
 |---|---|---|
 | 1 | `20260908150000_initial_schema.sql` | The `mu` schema, its ten tables, the security lockdown, the private `mu-media` bucket, and the line that lets the app see the schema |
+| 2 | `20260909030000_shorts_grid_slot.sql` | Six columns on `youtube_finish` for the Shorts-grid thumbnail (set, verified, distance, attempts, next look, last error), their descriptions, and a rule that "verified" always carries the distance that verified it |
+| 3 | `20260909031000_platform_posts_kind_story.sql` | Lets `platform_posts.kind` hold `story` as well as `video` and `text` |
 
 The long number is a UTC timestamp. It is kept in the filename so this folder and the database always agree on what has been applied, and so the Supabase CLI could take over later without renaming anything.
 
@@ -71,6 +73,31 @@ Supabase's security scanner reports one notice per table saying "RLS enabled but
 ### Exposing the schema
 
 The app keeps everything in a schema called `mu` rather than in `public`. Supabase's API only serves schemas it has been told about, so the last block of the file adds `mu` to that list. Step 8 above makes the same change in the dashboard so it survives future edits there.
+
+---
+
+## What the second file does
+
+YouTube keeps two thumbnails per Short: the one the API sets (watch page,
+search) and the one the channel's Shorts tab shows, which only YouTube Studio
+can set. The second file adds room on each `youtube_finish` row for that
+second slot. Five of its six columns were first added by hand from the Mac
+tool that used to do this job; running the file again is what makes the
+repository and the database agree. The sixth, `grid_next_attempt_at`, is when
+the hosted pass will next look at the row.
+
+One rule comes with it: a row cannot say the grid thumbnail is verified
+without also recording how close the public card was to the cover. Rows
+verified before the rule existed are left as they are (`NOT VALID`); every
+row written from now on obeys it.
+
+## What the third file does
+
+Each post row says what kind of post it is: `video` (the Short), `text` (the
+Facebook text-lane post) or, from now on, `story` (an Instagram or Facebook
+story). The Mac labels every post it schedules with that kind, and the app now
+copies the label onto the row. Without this file the database would refuse a
+story post.
 
 ---
 
