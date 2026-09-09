@@ -90,7 +90,7 @@ export async function runHealthCheck(): Promise<{
   );
 
   const beats = await readHeartbeats(supabase);
-  const dead = deadRoutes(beats, ["youtube.sweep"]);
+  const dead = deadRoutes(beats, ["youtube.sweep", "youtube.grid"]);
 
   const failures = results.filter((r) => !r.ok);
   const ok = failures.length === 0 && dead.length === 0;
@@ -139,7 +139,11 @@ export async function runHealthCheck(): Promise<{
     }
   }
 
-  for (const route of ["youtube.sweep"] as const) {
+  const consequence: Record<"youtube.sweep" | "youtube.grid", string> = {
+    "youtube.sweep": "Published Shorts are not being finished.",
+    "youtube.grid": "Finished Shorts are not getting their Shorts-grid thumbnail.",
+  };
+  for (const route of ["youtube.sweep", "youtube.grid"] as const) {
     const stopped = dead.find((d) => d.route === route);
     if (stopped) {
       await raiseAlert({
@@ -148,8 +152,8 @@ export async function runHealthCheck(): Promise<{
         subject: route,
         message:
           `The ${route} cron has not run for ${stopped.minutesAgo} minutes ` +
-          `(expected within ${ALERTS.cronDeadMinutes}). Published Shorts are not ` +
-          `being finished. Check Vercel → the project → Cron Jobs.`,
+          `(expected within ${ALERTS.cronDeadMinutes}). ${consequence[route]} ` +
+          `Check Vercel → the project → Cron Jobs.`,
       });
     } else {
       await resolveAlert({

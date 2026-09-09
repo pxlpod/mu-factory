@@ -90,6 +90,7 @@ export type EventArea =
   | "poll"
   | "finish"
   | "verify"
+  | "grid"
   | "cover"
   | "health"
   | "import"

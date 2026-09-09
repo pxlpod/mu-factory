@@ -127,6 +127,13 @@ export interface YoutubeFinishRow {
   next_attempt_at: string | null;
   last_error: string | null;
   cover_sha256: string | null;
+  /** The Shorts GRID slot — Studio-only; see `STUDIO` in config/youtube.ts. */
+  grid_thumbnail_set_at: string | null;
+  grid_thumbnail_verified_at: string | null;
+  grid_thumbnail_distance: number | null;
+  grid_attempts: number;
+  grid_next_attempt_at: string | null;
+  grid_error: string | null;
   created_at: string;
   updated_at: string;
 }

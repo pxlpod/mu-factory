@@ -17,7 +17,8 @@ a ✅ arrives when it clears.
 1. Open supabase.com → project **mindless-mu**.
 2. **SQL Editor → + New query.** Paste the whole of
    `supabase/migrations/20260908150000_initial_schema.sql` and **Run**. Expect
-   "Success. No rows returned". Running it twice is harmless.
+   "Success. No rows returned". Then the same for
+   `20260909030000_shorts_grid_slot.sql`. Running either twice is harmless.
 3. **Project Settings → API → Exposed schemas** → add `mu` → Save. The
    migration does this too, but the dashboard is what survives future edits.
 4. Note two values from the same API page for step 6: the **Project URL** and
@@ -88,6 +89,10 @@ Zernio dashboard → **Settings → API** → create or copy a key →
 4. **Do not** add a `functions.memory` block to `vercel.json` — the project
    is on Active CPU billing, where Vercel ignores it. Memory is set under the
    project's Function settings in the dashboard if it is ever needed.
+5. **Function memory for the grid pass.** `/api/youtube/grid` launches a
+   Chromium; give the project's functions at least **1 GB** under Settings →
+   Functions if the default is lower. Symptom of too little: the `youtube.grid`
+   heartbeat says `failed` with a browser launch error, or the run just dies.
 
 ### 7. First visit to `/status`
 
@@ -118,6 +123,27 @@ whatever the channel is called). The YouTube line turns green.
 If Google says "no refresh token", remove the app at
 myaccount.google.com/permissions and press Connect Google again.
 
+### 9b. Store the YouTube Studio session (one time, Mac)
+
+The Shorts-grid thumbnail has no API; the grid pass drives YouTube Studio in
+a browser and needs to be signed in as the channel owner. On the Mac, with
+`Tools/studio_bot.mjs`:
+
+```
+node studio_bot.mjs login && node studio_bot.mjs export
+```
+
+`login` opens a real Chrome, you sign in as the @mindless_mu owner, and
+`export` writes the session (cookies + the browser's user agent) into
+`mu.credentials` as `studio_session`. On `/status` the **YouTube Studio
+session** line turns green and shows when it was exported.
+
+From then on every hosted run writes Google's rotated cookies back, which is
+what keeps the session alive. If it does expire, the `studio.session_expired`
+alert says so and the fix is the same two commands. `npx tsx
+scripts/check-studio.ts` answers "is it still signed in?" without changing
+anything.
+
 ### 10. Import the existing queue (one time, terminal)
 
 From a checkout of the repo with a `.env.local` holding the same variables
@@ -146,13 +172,15 @@ Then press **Run sweep now** on `/status` and watch the Events section.
 | **Needs you** | Open alerts. Each also went to Monday as a notification. Gone when resolved. |
 | **Configuration** | One line per dependency, green or red. A red line names the fix. |
 | **YouTube connection** | Which channel is connected and since when. Reconnect here. |
-| **Cron heartbeats** | When `youtube.sweep` and `health` last ran. Sweep is every 15 min, health hourly. Silent for 45 min → an alert. |
-| **YouTube finishes** | One row per YouTube post. `pending` → `verify-pending` → `done`. `wait-for-human` means read **Last error**. ✓ marks show what is set and what is verified. |
+| **Cron heartbeats** | When `youtube.sweep`, `youtube.grid` and `health` last ran. Sweep every 15 min, grid pass 7 min after it, health hourly. Silent for 45 min → an alert. |
+| **YouTube finishes** | One row per YouTube post. `pending` → `verify-pending` → `grid pending` → `done`. `done` means BOTH the classic thumbnail/caption and the Shorts-grid card were read back. `wait-for-human` (or `grid: wait-for-human`) means read **Last error**. ✓ marks show what is set and what is verified; the **Shorts grid** column has its own pair plus the attempt count. |
 | **Webhooks** | The last 10 deliveries from Zernio. "not MU" in grey is a client-profile delivery, correctly ignored. |
 | **Events** | The last 50 things that happened, newest first. Red = error. |
 
-**Run sweep now** and **Run health check** call the same code the crons call,
-so pressing them proves the crons.
+**Run sweep now**, **Run grid pass** and **Run health check** call the same
+code the crons call, so pressing them proves the crons. The grid pass takes
+up to four minutes when it has work: a browser, Studio, and two minutes of
+watching the public grid.
 
 ---
 
@@ -169,8 +197,11 @@ land on that episode's Publishing item; the rest land on **MU Factory alerts**.
 | `youtube.unknown_episode:<video>` | A Short published with no episode attached | Find the Ep, set it on the `platform_posts` and `youtube_finish` rows, set state to `pending`. Future posts should carry `metadata.episode`. |
 | `youtube.finish_stuck:<Ep>` | Three attempts failed at YouTube | Read **Last error**. Fix the cause, set state back to `pending`. |
 | `youtube.verify_failed:<Ep>` | The read-back never matched after two hours | Open the video in YouTube Studio. If the thumbnail and captions look right, set the row to `done` (with both verified timestamps); if not, set it to `pending`. |
+| `youtube.grid_stuck:<Ep>` | Three grid attempts and the public Shorts grid never showed the cover | Open the channel's Shorts tab and the video's edit page in Studio. If the grid card is right, set `grid_thumbnail_verified_at` and `grid_thumbnail_distance` on the row; if not, read `grid_error` (shown as "Grid:" in **Last error**), fix the cause, and set `grid_attempts` to 0. |
+| `studio.session_expired` | Studio no longer accepts the stored session (or none is stored) | On the Mac: `node studio_bot.mjs login && node studio_bot.mjs export`. The next grid pass resolves the alert by itself. No video attempt was used up. |
 | `zernio.post_failed:<post>` | Zernio could not publish | Open the post in Zernio; the reason is there. |
 | `cron.dead:youtube.sweep` | No sweep for 45 minutes | Vercel → the project → **Cron Jobs**. Redeploy if they are missing. |
+| `cron.dead:youtube.grid` | No grid pass for 45 minutes | Same place. If the sweep is alive and only the grid is dead, check the function's memory (step 6, item 5) and its logs for a browser launch error. |
 | `config.invalid:<probe>` | A dependency check failed | `/status` — the red line names it. |
 
 A cover that simply is not in Drive yet is **not** an alert. The row waits,
@@ -182,7 +213,7 @@ looks again every hour, and says so in Events.
 
 All in `src/config/`, all in git, all changed by asking Claude Code:
 
-- `youtube.ts` — per-run cap, attempt counts, verify interval, dHash threshold, the blank SRT
+- `youtube.ts` — per-run cap, attempt counts, verify interval, dHash threshold, the blank SRT; `STUDIO` — the Studio URLs and selectors, the poll window, the grid attempt cap, the run budget
 - `zernio.ts` — profile and account ids, poll window, list page size
 - `monday.ts` — board and column ids, API version
 - `alerts.ts` — cooldown, cron-dead window, retention
@@ -195,6 +226,8 @@ All in `src/config/`, all in git, all changed by asking Claude Code:
 - No video is uploaded, edited, re-encoded or deleted. Ever.
 - No cover is re-encoded. Over 2 MB stops and asks.
 - Nothing is marked `done` because a call returned 200. Only a read-back does that.
+- Nothing is marked grid-verified because Studio's Save button was pressed. Only the public grid card hashing to the cover does that.
+- Nobody signs in to Google from the server. The Studio session is exported from a browser a human signed in with, and only used and refreshed here.
 - No Monday column is written in Phase 1. Notifications only.
 - Nothing reads any Zernio profile other than `Default`.
 - Nothing asks Pausha to run anything.

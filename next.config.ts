@@ -10,10 +10,23 @@ const nextConfig: NextConfig = {
    *
    * `googleapis` is externalised because it resolves API surfaces through
    * dynamic requires that a bundler can rewrite into a much larger, slower
-   * cold start. Shape copied from photo-publisher (2026-09-08); nothing is read
-   * from disk at run time here, so there is no `outputFileTracingIncludes`.
+   * cold start. Shape copied from photo-publisher (2026-09-08).
+   *
+   * `playwright-core` and `@sparticuz/chromium` (2026-09-09) drive YouTube
+   * Studio for the Shorts-grid thumbnail. Both locate files relative to their
+   * own package at run time — Playwright its browser protocol assets, the
+   * Chromium package its brotli-packed binary — so neither survives bundling.
    */
-  serverExternalPackages: ["sharp", "googleapis"],
+  serverExternalPackages: ["sharp", "googleapis", "playwright-core", "@sparticuz/chromium"],
+
+  /**
+   * The Chromium binary is read from disk with a computed path, which file
+   * tracing cannot follow. Name it for the one route that launches a browser
+   * so the deployed function carries it; the sweep and health stay small.
+   */
+  outputFileTracingIncludes: {
+    "/api/youtube/grid": ["./node_modules/@sparticuz/chromium/bin/**"],
+  },
 };
 
 export default nextConfig;

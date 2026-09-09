@@ -31,7 +31,10 @@ language, read-back verification.
   requires `caption_verified_at` AND `thumbnail_verified_at`, both written by
   the verify pass from what YouTube actually serves, and the database CHECK
   refuses a `done` without them. Nothing in the finish pass marks anything
-  verified. If a change makes verification unable to fail, it is wrong.
+  verified. The Shorts-grid slot follows the same law: `grid_thumbnail_verified_at`
+  is written by `resolveGridVerified` alone, from the card the PUBLIC grid
+  serves; pressing Save in Studio writes `grid_thumbnail_set_at` and nothing
+  more. If a change makes verification unable to fail, it is wrong.
 - **Monday, not Slack.** Alerts are `create_notification` on the episode's
   Publishing item (fallback: `MONDAY_ALERT_ITEM_ID`). There is no Slack
   webhook, no `SLACK_*` env var, no `slack.ts`. Do not add one.
@@ -47,6 +50,11 @@ language, read-back verification.
 - **`src/lib/google/auth.ts` is the only file that builds `google.auth.OAuth2`,
   calls `setCredentials`, or persists a rotated token.** Tokens live in
   `mu.credentials`, service-role only, never in env, never in a response.
+- **`src/lib/studio.ts` is the only file that loads or saves the Studio
+  session or launches a browser.** The session (`studio_session`) is a
+  Playwright storageState exported from a browser a human signed in with; this
+  app never signs in to Google itself. Cookies go back to the row only after
+  a run has seen Studio accept them.
 - **Phase 1 writes no Monday column.** It reads the Publishing board to find
   an item and it sends notifications. `statusValue`/`updateItem` exist in
   `src/lib/monday.ts` for Phase 2 and are unused.
@@ -77,9 +85,9 @@ language, read-back verification.
   subclass + a lazy env getter that throws. `googleapis` is the one SDK
   (Drive via service account, YouTube via OAuth); `sharp` is allowed for the
   read-only hash.
-- **Retry policy lives in `src/lib/attempts.ts`.** Finish and verify stop and
-  wait for a human at their caps; a missing cover backs off hourly forever
-  because nothing is broken.
+- **Retry policy lives in `src/lib/attempts.ts`.** Finish, verify and grid
+  stop and wait for a human at their caps; a missing cover backs off hourly
+  forever because nothing is broken.
 - **Monday API version is tracked in config** (`2025-10`), not pinned to an
   old one. Status columns, when Phase 2 writes them, go by index.
 - **Env is read lazily** inside a throwing getter, never at module top level.
@@ -115,12 +123,41 @@ language, read-back verification.
 - **Alert `payload` carries `mondayItemId`** so the resolve notification lands
   on the same item the raise did.
 
+## Decisions taken for the Shorts grid (2026-09-09)
+
+- **The grid slot has no API.** `thumbnails.set` fills the classic slot only;
+  the channel's Shorts tab reads `i.ytimg.com/vi/<id>/sardefault.jpg`, which
+  only YouTube Studio's edit page sets (proven 02:50Z). Hence a browser.
+- **Own cron (`/api/youtube/grid`, seven minutes after the sweep), not a
+  fourth sweep pass.** One row is a browser launch, a Studio page, an upload
+  and up to two minutes of polling; inside the sweep that would starve the
+  caption and classic-thumbnail work, and an expired Studio session would
+  take the whole sweep down. Same auth, run lock, heartbeat and budget shape.
+- **Public first.** Before opening Studio the pass reads the public grid; a
+  card that already hashes to the cover is recorded and Studio is not touched.
+  A human's hand-set thumbnail and a late-propagating upload both land here.
+- **A stale session is a rail condition, not a row failure.** A redirect to
+  `accounts.google.com` raises `studio.session_expired`, stops the run and
+  consumes no `grid_attempts`. Nothing about the video is wrong.
+- **`done` on /status means both slots.** `state` still means the classic
+  slot (the CHECK is unchanged); the page derives `grid pending` and
+  `grid: wait-for-human` from the grid columns and reserves the word `done`.
+- **Run budget in config, not just `maxDuration`.** `STUDIO.runBudgetMs`
+  (270 s) and `perRowBudgetMs` (150 s) stop the pass opening a row it cannot
+  finish, so a Vercel kill never leaves a half-saved upload unlogged.
+- **`@sparticuz/chromium` + `playwright-core`,** both in
+  `serverExternalPackages`, with the Chromium binary named in
+  `outputFileTracingIncludes` for the grid route only. The binary inflates
+  into /tmp once per warm instance; graphics are off. Function memory is set
+  in the dashboard (≥ 1 GB), never in `vercel.json`.
+
 ## Checking things by hand (Christopher only)
 
 ```bash
 npx tsx scripts/check-drive.ts             # key, share, Covers/yt contents
 npx tsx scripts/check-youtube.ts [videoId] # stored token, live channel, one video's tracks
 npx tsx scripts/backfill-covers.ts         # mirror all covers, verified
+npx tsx scripts/check-studio.ts            # is the stored Studio session still signed in? (writes nothing)
 npx tsx scripts/import-publish-queue.ts ~/Publish-Queue.csv --youtube-done-through 2026-09-01
 ```
 

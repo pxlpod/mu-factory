@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { YOUTUBE } from "@/config/youtube";
+import { STUDIO, YOUTUBE } from "@/config/youtube";
 import { openAlerts } from "@/lib/alerts";
 import { ATTEMPT_POLICIES } from "@/lib/attempts";
 import { isSignedIn } from "@/lib/auth";
@@ -79,7 +79,8 @@ export default async function StatusPage({
   }
 
   const problemCount = events.filter((e) => e.level === "error").length;
-  const waiting = finishes.filter((f) => f.state === "wait-for-human").length;
+  const waiting = finishes.filter((f) => rowLabel(f).problem).length;
+  const gridPending = finishes.filter((f) => rowLabel(f).text === "grid pending").length;
 
   return (
     <main className="mx-auto max-w-5xl space-y-8 p-6">
@@ -87,7 +88,8 @@ export default async function StatusPage({
         <div>
           <h1 className="text-lg font-medium">MU Factory</h1>
           <p className="text-[var(--muted)]">
-            YouTube finisher. The sweep runs every fifteen minutes; health hourly.
+            YouTube finisher. The sweep runs every fifteen minutes, the Shorts-grid
+            pass seven minutes after it; health hourly.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -97,6 +99,7 @@ export default async function StatusPage({
             url="/api/youtube/sweep"
             primary
           />
+          <RunNowButton label="Run grid pass" busyLabel="In Studio…" url="/api/youtube/grid" />
           <RunNowButton label="Run health check" busyLabel="Checking…" url="/api/health" />
         </div>
       </header>
@@ -209,7 +212,8 @@ export default async function StatusPage({
       <Section
         title={
           `YouTube finishes (${finishes.length})` +
-          (waiting ? ` — ${waiting} waiting for you` : "")
+          (waiting ? ` — ${waiting} waiting for you` : "") +
+          (gridPending ? ` — ${gridPending} grid pending` : "")
         }
       >
         {finishes.length === 0 ? (
@@ -229,6 +233,7 @@ export default async function StatusPage({
                   <Th>Lang</Th>
                   <Th>Caption</Th>
                   <Th>Thumb</Th>
+                  <Th>Shorts grid</Th>
                   <Th>Last error</Th>
                 </tr>
               </thead>
@@ -251,7 +256,7 @@ export default async function StatusPage({
                       )}
                     </Td>
                     <Td>
-                      <Tag text={row.state} problem={row.state === "wait-for-human"} />
+                      <Tag text={rowLabel(row).text} problem={rowLabel(row).problem} />
                     </Td>
                     <Td>
                       {row.attempts}
@@ -273,11 +278,27 @@ export default async function StatusPage({
                       ) : null}
                     </Td>
                     <Td>
+                      {flag(row.grid_thumbnail_set_at)} set · {flag(row.grid_thumbnail_verified_at)} verified
+                      {row.grid_thumbnail_distance !== null ? (
+                        <span className="text-[var(--muted)]"> ({row.grid_thumbnail_distance} bits)</span>
+                      ) : null}
+                      {!row.grid_thumbnail_verified_at && row.grid_attempts > 0 ? (
+                        <span className="text-[var(--muted)]">
+                          {" "}
+                          · {row.grid_attempts}/{STUDIO.gridAttempts}
+                          {row.grid_next_attempt_at ? ` · next ${formatTime(row.grid_next_attempt_at)}` : ""}
+                        </span>
+                      ) : null}
+                    </Td>
+                    <Td>
                       {row.last_error ? (
                         <span className="break-words text-[var(--bad)]">{row.last_error}</span>
-                      ) : (
-                        ""
-                      )}
+                      ) : null}
+                      {!row.grid_thumbnail_verified_at && row.grid_error ? (
+                        <span className="break-words text-[var(--bad)]">
+                          {row.last_error ? " · " : ""}Grid: {row.grid_error}
+                        </span>
+                      ) : null}
                     </Td>
                   </tr>
                 ))}
@@ -456,6 +477,24 @@ function Td({ children }: { children: React.ReactNode }) {
 
 function flag(iso: string | null): string {
   return iso ? "✓" : "·";
+}
+
+/**
+ * What to call a row. "done" is reserved for a row verified on BOTH slots —
+ * the classic thumbnail and caption (state = done) and the Shorts-grid card
+ * (grid_thumbnail_verified_at). A row the sweep has finished but whose grid
+ * card has not been read back is "grid pending", and one that has used its
+ * grid attempts is waiting for a human even though its state column says done.
+ */
+function rowLabel(row: YoutubeFinishRow): { text: string; problem: boolean } {
+  if (row.state !== "done") {
+    return { text: row.state, problem: row.state === "wait-for-human" };
+  }
+  if (row.grid_thumbnail_verified_at) return { text: "done", problem: false };
+  if (row.grid_attempts >= STUDIO.gridAttempts) {
+    return { text: "grid: wait-for-human", problem: true };
+  }
+  return { text: "grid pending", problem: false };
 }
 
 function formatTime(iso: string): string {

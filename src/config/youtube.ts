@@ -102,6 +102,94 @@ export const YOUTUBE = {
   coverAspect: 9 / 16,
 } as const;
 
+/**
+ * The Shorts GRID thumbnail — a second, Studio-only slot.
+ *
+ * PROVEN 2026-09-09 02:50Z: `thumbnails.set` fills only the classic thumbnail
+ * (the watch page, search, embeds). The card a viewer sees on the channel's
+ * Shorts tab reads a SEPARATE image that YouTube Studio alone can set, served
+ * as `https://i.ytimg.com/vi/<videoId>/sardefault.jpg?sqp=…`. The Data API has
+ * no call for it. So the grid step drives Studio's own edit page in a headless
+ * browser with a signed-in session Christopher exports from his Mac, uploads
+ * the same `cover_<Ep>.jpg` bytes, saves — and then, MU LAW 3, loads the PUBLIC
+ * Shorts grid as an anonymous viewer, downloads the card image and hashes it
+ * against the cover. Nothing here trusts the Save button.
+ */
+export const STUDIO = {
+  /** `mu.credentials.provider` holding the Playwright storageState export. */
+  credentialKey: "studio_session",
+
+  /** Studio's edit page for a video; the thumbnail uploader lives here. */
+  editUrl: (videoId: string) => `https://studio.youtube.com/video/${videoId}/edit`,
+  /** Where a signed-out session lands. Any URL on this host means "expired". */
+  signInHost: "accounts.google.com",
+  /** The public Shorts grid, read anonymously — what Pausha sees. */
+  shortsGridUrl: `https://www.youtube.com/${YOUTUBE.channelHandle}/shorts`,
+
+  /**
+   * Selectors observed 2026-09-09. Studio is a Polymer app: the file input is
+   * hidden (Playwright's setInputFiles does not care) and the Save button is a
+   * custom element whose `disabled` attribute toggles.
+   */
+  selectors: {
+    fileInput: "ytcp-thumbnail-uploader input#file-loader",
+    saveButton: "ytcp-button#save",
+    /** The card for one Short on the public grid, found by its link. */
+    shortCard: (videoId: string) => `a[href*="/shorts/${videoId}"]`,
+  },
+
+  /**
+   * Studio refuses headless Chrome as "unsupported browser" (the UA carries
+   * HeadlessChrome). The session export records the UA it was signed in with
+   * and that is what is sent; this is the fallback when it did not.
+   */
+  fallbackUserAgent:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  viewport: { width: 1440, height: 1000 },
+
+  /** Wall-clock ceilings for the browser. */
+  navigationTimeoutMs: 45_000,
+  /** The Save button re-enables once Studio has accepted the file. */
+  saveEnableTimeoutMs: 60_000,
+  /** …and disables again once the save round-trip completes. */
+  saveCompleteTimeoutMs: 60_000,
+  /** Studio keeps working after Save disables; leaving early loses the upload. */
+  saveSettleMs: 8_000,
+
+  /**
+   * Verification: poll the public grid this long, this often. The grid image
+   * followed a Studio save within about two minutes on 2026-09-09.
+   */
+  verifyWindowMs: 120_000,
+  verifyPollMs: 10_000,
+  /** Same rule as the classic slot: the served card must hash within this. */
+  gridMaxDistance: YOUTUBE.thumbnailMaxDistance,
+
+  /**
+   * Rows per run. One row is a browser launch, a Studio page, an upload and
+   * up to two minutes of polling — about three minutes worst case. Two fit the
+   * route's 300 s ceiling only when the first verifies fast, so the pass also
+   * stops opening rows once fewer than `perRowBudgetMs` remain.
+   */
+  maxPerRun: 2,
+  runBudgetMs: 270_000,
+  perRowBudgetMs: 150_000,
+
+  /** Consecutive failed grid attempts before the row waits for a human. */
+  gridAttempts: 3,
+  gridRetryMs: 15 * 60 * 1000,
+
+  /** Downloading one card image from i.ytimg.com. */
+  imageFetchTimeoutMs: 20_000,
+
+  /**
+   * Set on the anonymous context so youtube.com serves the grid rather than a
+   * consent interstitial when the function happens to run outside the US.
+   */
+  consentCookie: { name: "SOCS", value: "CAI", domain: ".youtube.com", path: "/" },
+} as const;
+
 export type FinishState =
   | "pending"
   | "verify-pending"
