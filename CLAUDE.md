@@ -142,6 +142,16 @@ language, read-back verification.
 - **`done` on /status means both slots.** `state` still means the classic
   slot (the CHECK is unchanged); the page derives `grid pending` and
   `grid: wait-for-human` from the grid columns and reserves the word `done`.
+- **A browser death mid-row is relaunched once, in the run.** Both real
+  hosted attempts (Ep019 2026-09-10, Ep008 2026-09-12) died on the first
+  navigation with "Target page, context or browser has been closed" and
+  Vercel's log held only the request line. The pass now relaunches once and
+  retries the row at the same attempt number; Chromium writes its own log to
+  `/tmp` (`--enable-logging` + `CHROME_LOG_FILE`; `--log-file` is ignored on
+  Linux) and `describeBrowserLoss` puts its
+  tail, `/tmp` free space and rss into the event. A second death is the
+  row's failure. The Mac's `studio_bot` still runs at 22:20Z daily and
+  usually reaches a row first; the hosted pass is only proven once it is off.
 - **Run budget in config, not just `maxDuration`.** `STUDIO.runBudgetMs`
   (270 s) and `perRowBudgetMs` (150 s) stop the pass opening a row it cannot
   finish, so a Vercel kill never leaves a half-saved upload unlogged.

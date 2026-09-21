@@ -219,6 +219,10 @@ thumbnails from being finished.
    `grid_thumbnail_distance`, written by `resolveGridVerified` alone.
    Not within the window → `grid_attempts + 1`, `grid_error`, again in 15
    min. Three → the row waits for a human + alert `youtube.grid_stuck:<Ep>`.
+   A browser that dies under a row (single-process Chromium: one renderer
+   crash is the whole browser) is relaunched once in the same run and the
+   row retried without consuming an attempt; the warn line carries how long
+   it lived, `/tmp` free space, memory and the tail of Chromium's own log.
 5. Write the rotated cookies back to `mu.credentials` — only if Studio
    accepted the session this run. Heartbeat `youtube.grid`; every outcome is
    an `events` row with area `grid`; returns

@@ -1,3 +1,7 @@
+import { readFile, statfs } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import serverlessChromium from "@sparticuz/chromium";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
@@ -130,10 +134,27 @@ export async function describeStudioSession(
 // The browser
 // ---------------------------------------------------------------------------
 
+/**
+ * Chromium's own log, so a browser that dies mid-run can say why.
+ *
+ * Playwright swallows the browser's stderr, and Vercel's runtime log then
+ * shows only the request line (seen 2026-09-10 and -12: two runs ended with
+ * "Target page, context or browser has been closed" on the first navigation
+ * and nothing else). `--enable-logging` with `CHROME_LOG_FILE` in the
+ * browser's environment makes Chromium write to a file in the function's /tmp
+ * instead (`--log-file` is ignored by the Linux headless shell; tested
+ * 2026-09-21); `describeBrowserLoss` reads its tail into the event.
+ * Overwritten on every launch.
+ */
+const CHROMIUM_LOG_FILE = join(tmpdir(), "mu-chromium.log");
+
 export async function launchBrowser(): Promise<Browser> {
+  const logging = ["--enable-logging", "--log-level=0"];
+  const env = { ...process.env, CHROME_LOG_FILE: CHROMIUM_LOG_FILE } as Record<string, string | undefined>;
+
   const override = process.env.CHROMIUM_EXECUTABLE_PATH;
   if (override) {
-    return chromium.launch({ executablePath: override, headless: true });
+    return chromium.launch({ executablePath: override, headless: true, args: logging, env });
   }
 
   // No WebGL needed to press a button; skipping the graphics stack also skips
@@ -142,9 +163,105 @@ export async function launchBrowser(): Promise<Browser> {
   const executablePath = await serverlessChromium.executablePath();
   return chromium.launch({
     executablePath,
-    args: serverlessChromium.args,
+    args: [...serverlessChromium.args, ...logging],
     headless: true,
+    env,
   });
+}
+
+/**
+ * One browser with the two contexts the grid pass needs, and what it knows
+ * about them. Built in one place so a mid-run relaunch is the same code as
+ * the first launch.
+ */
+export interface BrowserSet {
+  browser: Browser;
+  studio: BrowserContext;
+  viewer: BrowserContext;
+  studioPage: Page;
+  viewerPage: Page;
+  launchedAt: number;
+  launchMs: number;
+  /** Set by the caller once Studio has accepted this set's cookies. */
+  signedIn: boolean;
+}
+
+export async function openBrowserSet(session: StudioSession): Promise<BrowserSet> {
+  const t0 = Date.now();
+  const browser = await launchBrowser();
+  const studio = await openStudioContext(browser, session);
+  const viewer = await openViewerContext(browser, session);
+  const studioPage = await studio.newPage();
+  const viewerPage = await viewer.newPage();
+  return {
+    browser,
+    studio,
+    viewer,
+    studioPage,
+    viewerPage,
+    launchedAt: t0,
+    launchMs: Date.now() - t0,
+    signedIn: false,
+  };
+}
+
+export async function closeBrowserSet(set: BrowserSet): Promise<void> {
+  await set.viewer.close().catch(() => undefined);
+  await set.studio.close().catch(() => undefined);
+  await set.browser.close().catch(() => undefined);
+}
+
+/** True when the browser behind this set is gone, whatever the error said. */
+export function browserLost(set: BrowserSet, error: unknown): boolean {
+  if (!set.browser.isConnected()) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /Target page, context or browser has been closed|browser has been closed|Browser closed|crashed/i.test(
+    message,
+  );
+}
+
+/**
+ * What there is to know when the browser dies: how long it lived, the
+ * function's memory, free space in /tmp (Chromium inflates ~330 MB there and
+ * then writes its profile and cache), and the tail of Chromium's own log.
+ * All read-only; every probe is allowed to fail on its own.
+ */
+export async function describeBrowserLoss(
+  set: BrowserSet,
+): Promise<{ summary: string; detail: Record<string, unknown> }> {
+  const detail: Record<string, unknown> = {
+    browserAliveMs: Date.now() - set.launchedAt,
+    launchMs: set.launchMs,
+    rssMb: Math.round(process.memoryUsage().rss / 1048576),
+  };
+
+  try {
+    const fs = await statfs(tmpdir());
+    detail.tmpFreeMb = Math.round((Number(fs.bavail) * Number(fs.bsize)) / 1048576);
+  } catch (error) {
+    detail.tmpFreeMb = `unreadable: ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  try {
+    const log = await readFile(CHROMIUM_LOG_FILE, "utf8");
+    const lines = log.trimEnd().split("\n");
+    detail.chromiumLogLines = lines.length;
+    detail.chromiumLogTail = lines.slice(-25);
+  } catch {
+    detail.chromiumLogTail = "no log file";
+  }
+
+  const tail = Array.isArray(detail.chromiumLogTail) ? detail.chromiumLogTail : [];
+  const notable = tail.filter((l) => /FATAL|ERROR|crash|oom|Out of memory|No space/i.test(l)).slice(-3);
+
+  return {
+    summary:
+      `browser lived ${Math.round((detail.browserAliveMs as number) / 1000)} s after a ` +
+      `${Math.round(set.launchMs / 1000)} s launch; rss ${detail.rssMb} MB; /tmp free ` +
+      `${detail.tmpFreeMb} MB` +
+      (notable.length ? `; chromium log: ${notable.join(" | ").slice(0, 400)}` : "; chromium log has nothing notable"),
+    detail,
+  };
 }
 
 /** The signed-in context: the exported cookies, under the exported user agent. */
