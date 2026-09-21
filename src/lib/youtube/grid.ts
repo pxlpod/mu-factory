@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Page } from "playwright-core";
 
 import { ALERT_CONDITIONS } from "@/config/alerts";
 import { FILE_NAMES, RUN_LOCK_WINDOW_MS } from "@/config/factory";
@@ -14,13 +14,15 @@ import { findPublishingItemId } from "@/lib/monday";
 import { patchFinish, resolveGridVerified } from "@/lib/resolve-status";
 import {
   assertSignedIn,
-  launchBrowser,
+  browserLost,
+  closeBrowserSet,
+  describeBrowserLoss,
   loadStudioSession,
-  openStudioContext,
-  openViewerContext,
+  openBrowserSet,
   persistRefreshedSession,
   StudioError,
   StudioSessionExpiredError,
+  type BrowserSet,
   type StudioSession,
 } from "@/lib/studio";
 import { createServiceClient, type MuClient } from "@/lib/supabase";
@@ -53,6 +55,14 @@ import type { YoutubeFinishRow } from "@/types/db";
  * accounts.google.com stops the run before any row is touched, raises
  * `studio.session_expired` with the one instruction that fixes it, and does
  * not consume anyone's attempt — nothing about the video is wrong.
+ *
+ * A BROWSER THAT DIES MID-ROW IS RELAUNCHED ONCE, IN THE SAME RUN. Chromium
+ * here runs single-process, so a renderer crash on one page is the whole
+ * browser gone ("Target page, context or browser has been closed" — seen on
+ * the first navigation of both real attempts, 2026-09-10 and -12). One
+ * relaunch and a retry of the same row costs six seconds and does not
+ * consume an attempt; a second death in one row is the row's failure, with
+ * Chromium's own log tail in the event so the cause is visible next time.
  *
  * ITS OWN CRON, NOT A FOURTH PASS OF THE SWEEP. A browser launch plus a Studio
  * page plus two minutes of polling is most of the 300 s the sweep already
@@ -200,21 +210,14 @@ async function gridPending(
     return;
   }
 
-  let browser: Browser | null = null;
-  let studio: BrowserContext | null = null;
-  let viewer: BrowserContext | null = null;
-  let signedInOnce = false;
+  let set: BrowserSet | null = null;
   let drive: ReturnType<typeof createDriveClient> | null = null;
   let folders: MuFolders | null = null;
 
   try {
-    browser = await launchBrowser();
-    studio = await openStudioContext(browser, session);
-    viewer = await openViewerContext(browser, session);
-    const studioPage = await studio.newPage();
-    const viewerPage = await viewer.newPage();
+    set = await openBrowserSet(session);
 
-    for (const row of rows) {
+    rowLoop: for (const row of rows) {
       const remaining = STUDIO.runBudgetMs - (Date.now() - startedAt);
       if (remaining < STUDIO.perRowBudgetMs) {
         await logEvent(supabase, {
@@ -231,72 +234,129 @@ async function gridPending(
       summary.checked += 1;
       const ep = row.ep!;
       const attempt = row.grid_attempts + 1;
+      let relaunched = false;
 
-      try {
-        if (!drive || !folders) {
-          drive = createDriveClient();
-          folders = await resolveFolders(drive);
-        }
+      for (;;) {
+        try {
+          if (!drive || !folders) {
+            drive = createDriveClient();
+            folders = await resolveFolders(drive);
+          }
 
-        const outcome = await gridOne(
-          supabase,
-          { studioPage, viewerPage, drive, folders, session },
-          row,
-          attempt,
-          runId,
-        );
-        if (outcome.signedIn) signedInOnce = true;
-        if (outcome.uploaded) summary.uploaded += 1;
-        if (outcome.verified) summary.verified += 1;
-        else summary.waiting += 1;
-      } catch (error) {
-        if (error instanceof StudioSessionExpiredError) {
-          // One condition for the rail, not one per video, and no attempt
-          // consumed: the video is fine, the session is not.
-          await raiseAlert({
+          const outcome = await gridOne(
             supabase,
-            condition: ALERT_CONDITIONS.studioSessionExpired,
-            message: error.message,
-          });
-          await logEvent(supabase, {
-            level: "error",
-            area: "grid",
-            message: `${ep}: ${error.message}`,
-            ep,
+            {
+              studioPage: set.studioPage,
+              viewerPage: set.viewerPage,
+              drive,
+              folders,
+              session,
+            },
+            row,
+            attempt,
             runId,
-          });
-          await patchFinish(supabase, row.platform_post_id, {
-            grid_error: error.message,
-            grid_next_attempt_at: nextAttemptAt("youtube_grid"),
-          });
+          );
+          if (outcome.signedIn) set.signedIn = true;
+          if (outcome.uploaded) summary.uploaded += 1;
+          if (outcome.verified) summary.verified += 1;
+          else summary.waiting += 1;
+          break;
+        } catch (error) {
+          if (error instanceof StudioSessionExpiredError) {
+            // One condition for the rail, not one per video, and no attempt
+            // consumed: the video is fine, the session is not.
+            await raiseAlert({
+              supabase,
+              condition: ALERT_CONDITIONS.studioSessionExpired,
+              message: error.message,
+            });
+            await logEvent(supabase, {
+              level: "error",
+              area: "grid",
+              message: `${ep}: ${error.message}`,
+              ep,
+              runId,
+            });
+            await patchFinish(supabase, row.platform_post_id, {
+              grid_error: error.message,
+              grid_next_attempt_at: nextAttemptAt("youtube_grid"),
+            });
+            summary.errors += 1;
+            summary.waiting += 1;
+            break rowLoop;
+          }
+
+          if (browserLost(set, error) && !relaunched) {
+            // The browser died under this row. Say what is known, launch a
+            // fresh one and try the same row again — same attempt number,
+            // because nothing about the video has been learned yet.
+            relaunched = true;
+            const loss = await describeBrowserLoss(set);
+            await logEvent(supabase, {
+              level: "warn",
+              area: "grid",
+              message:
+                `${ep}: the browser died mid-attempt (${describe(error).split("\n")[0]}). ` +
+                `${loss.summary}. Relaunching once and trying the row again.`,
+              detail: loss.detail,
+              ep,
+              runId,
+            });
+            await persistIfSignedIn(supabase, set, session, runId);
+            await closeBrowserSet(set);
+            set = await openBrowserSet(session);
+            continue;
+          }
+
           summary.errors += 1;
           summary.waiting += 1;
+          let reason = describe(error);
+          if (browserLost(set, error)) {
+            const loss = await describeBrowserLoss(set);
+            reason = `${reason.split("\n")[0]} (second browser death on this row; ${loss.summary})`;
+            await logEvent(supabase, {
+              level: "warn",
+              area: "grid",
+              message: `${ep}: browser diagnostics after the second death.`,
+              detail: loss.detail,
+              ep,
+              runId,
+            });
+          }
+          await failAttempt(supabase, row, attempt, reason, runId);
           break;
         }
-
-        summary.errors += 1;
-        summary.waiting += 1;
-        await failAttempt(supabase, row, attempt, describe(error), runId);
       }
     }
   } finally {
-    // The jar only goes back if Studio accepted it this run; a run that ended
-    // on the sign-in page must not overwrite the last good export.
-    if (studio && signedInOnce) {
-      try {
-        await persistRefreshedSession(studio, session, supabase);
-      } catch (error) {
-        await logEvent(supabase, {
-          level: "warn",
-          area: "grid",
-          message: `Studio session cookies were not written back: ${describe(error)}`,
-          runId,
-        });
-      }
+    if (set) {
+      await persistIfSignedIn(supabase, set, session, runId);
+      await closeBrowserSet(set);
     }
-    await viewer?.close().catch(() => undefined);
-    await studio?.close().catch(() => undefined);
-    await browser?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * The jar goes back only if Studio accepted this browser's cookies; a set
+ * that ended on the sign-in page, or never reached Studio, must not overwrite
+ * the last good export.
+ */
+async function persistIfSignedIn(
+  supabase: MuClient,
+  set: BrowserSet,
+  session: StudioSession,
+  runId: string,
+): Promise<void> {
+  if (!set.signedIn || !set.browser.isConnected()) return;
+  try {
+    await persistRefreshedSession(set.studio, session, supabase);
+  } catch (error) {
+    await logEvent(supabase, {
+      level: "warn",
+      area: "grid",
+      message: `Studio session cookies were not written back: ${describe(error)}`,
+      runId,
+    });
   }
 }
 
