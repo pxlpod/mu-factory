@@ -131,13 +131,69 @@ export async function resolveFolderPath(
 export interface MuFolders {
   root: string;
   coversYt: string;
+  coversIg: string;
+  finals: string;
 }
 
-/** The folders Phase 1 needs, resolved once per invocation. */
+/**
+ * The root folder itself: reachable, a folder, and visible to the service
+ * account — which it is only when someone shared it. Returns the folder's
+ * name so /status can show which folder the id points at.
+ *
+ * WHY THIS EXISTS (2026-10-17): on 2026-10-03 Drive for desktop on Pausha's Mac
+ * re-linked and rebuilt `MU Factory` as a NEW folder with a new id, owned by
+ * her alone. `DRIVE_ROOT_FOLDER_ID` kept pointing at the old id for two weeks
+ * and every finish ended in wait-for-human. Resolving subfolders by name does
+ * not protect the root; this probe does, by failing loudly in the hourly check.
+ */
+export async function probeRoot(
+  drive: drive_v3.Drive,
+): Promise<{ id: string; name: string }> {
+  const id = rootFolderId();
+  try {
+    const res = await drive.files.get({
+      fileId: id,
+      fields: "id, name, mimeType, trashed",
+      supportsAllDrives: true,
+    });
+    if (res.data.trashed) {
+      throw new DriveError(`Drive root folder ${id} is in the trash.`);
+    }
+    if (res.data.mimeType !== "application/vnd.google-apps.folder") {
+      throw new DriveError(`Drive root ${id} is not a folder (${res.data.mimeType}).`);
+    }
+    return { id, name: res.data.name ?? "(unnamed)" };
+  } catch (error) {
+    if (error instanceof DriveError) throw error;
+    const status = (error as { code?: number; response?: { status?: number } }).code
+      ?? (error as { response?: { status?: number } }).response?.status;
+    if (status === 404 || status === 403) {
+      throw new DriveError(
+        `Drive root folder ${id} is not visible to ${credentials().client_email} ` +
+          `(HTTP ${status}). Either the folder was deleted or rebuilt with a new id ` +
+          `(update DRIVE_ROOT_FOLDER_ID and redeploy), or it is not shared with the ` +
+          `service account (Share → add that address as Editor).`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * The three folders the app reads, resolved once per invocation.
+ *
+ * All three since 2026-10-17 rather than only `Covers/yt`: the executor
+ * (Phase 3) needs `Covers` and `Finals`, and the hourly probe should say a
+ * missing folder before a hand-off trips over it.
+ */
 export async function resolveFolders(drive: drive_v3.Drive): Promise<MuFolders> {
   const root = rootFolderId();
-  const coversYt = await resolveFolderPath(drive, root, DRIVE_FOLDERS.coversYt);
-  return { root, coversYt };
+  const [coversYt, coversIg, finals] = await Promise.all([
+    resolveFolderPath(drive, root, DRIVE_FOLDERS.coversYt),
+    resolveFolderPath(drive, root, DRIVE_FOLDERS.coversIg),
+    resolveFolderPath(drive, root, DRIVE_FOLDERS.finals),
+  ]);
+  return { root, coversYt, coversIg, finals };
 }
 
 /** Non-folder files directly inside a folder, newest last. Dotfiles ignored. */

@@ -5,10 +5,6 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/youtube/grid",
-      "schedule": "7,22,37,52 * * * *"
-    },
-    {
       "path": "/api/health",
       "schedule": "0 * * * *"
     }

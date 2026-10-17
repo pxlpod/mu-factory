@@ -3,6 +3,7 @@ import { RUN_LOCK_WINDOW_MS } from "@/config/factory";
 import { YOUTUBE } from "@/config/youtube";
 import { raiseAlert, resolveAlert } from "@/lib/alerts";
 import { nextAttemptAt, policy } from "@/lib/attempts";
+import { reflectFinishOnBoard } from "@/lib/board-reflect";
 import { dhash, hammingDistance } from "@/lib/dhash";
 import { createDriveClient, describe, resolveFolders, type MuFolders } from "@/lib/drive";
 import { logEvent } from "@/lib/events";
@@ -11,6 +12,7 @@ import { beat } from "@/lib/heartbeat";
 import { CoverTooLargeError, ensureCoverYt } from "@/lib/media";
 import { findPublishingItemId } from "@/lib/monday";
 import {
+  clearGridForReset,
   patchFinish,
   resolveDone,
   setFinishState,
@@ -409,11 +411,28 @@ async function finishOne(
   }
 
   if (video.privacyStatus && !["public", "unlisted"].includes(video.privacyStatus)) {
-    await waitForHuman(
-      supabase,
-      row.platform_post_id,
-      `Video ${videoId} is ${video.privacyStatus}; expected public or unlisted.`,
-    );
+    // A Short reads `private` for a few minutes after Zernio's upload (Ep007
+    // 2026-09-10, Ep009 2026-09-13 — both public shortly after). Inside the
+    // grace window that is a timing miss: look again soon, give the attempt
+    // back. Past it, a private video is a real state and a human decides.
+    const ageMs = Date.now() - new Date(row.created_at).getTime();
+    const note = `Video ${videoId} is ${video.privacyStatus}; expected public or unlisted.`;
+    if (ageMs < YOUTUBE.privateGraceMs) {
+      await patchFinish(supabase, row.platform_post_id, {
+        attempts: row.attempts,
+        next_attempt_at: new Date(Date.now() + YOUTUBE.privateRetryMs).toISOString(),
+        last_error: `${note} Row is ${Math.round(ageMs / 60000)} min old — assuming publish lag, looking again shortly.`,
+      });
+      await logEvent(supabase, {
+        level: "warn",
+        area: "finish",
+        message: `${ep}: video still ${video.privacyStatus} ${Math.round(ageMs / 60000)} min after publish — publish lag, again in ${Math.round(YOUTUBE.privateRetryMs / 60000)} min (no attempt used).`,
+        ep,
+        runId,
+      });
+      return "waiting";
+    }
+    await waitForHuman(supabase, row.platform_post_id, note);
     return "waiting";
   }
 
@@ -469,6 +488,25 @@ async function finishOne(
 
   // e. Thumbnail. The cover's own bytes.
   if (!row.thumbnail_set_at) {
+    // THE ORDER LAW: setting the classic thumbnail resets the Shorts-grid tile
+    // (doc 12, 2026-09-10). A row whose grid tile is already verified — a human
+    // reset, a re-run — gets its grid verification cleared in the same step,
+    // so the grid bot re-sets and re-proves the tile instead of it silently
+    // vanishing from the channel page.
+    if (row.grid_thumbnail_verified_at || row.grid_thumbnail_set_at) {
+      await clearGridForReset(
+        supabase,
+        row.platform_post_id,
+        "Classic thumbnail re-set by the finisher; the grid tile must be set again (order law).",
+      );
+      await logEvent(supabase, {
+        level: "warn",
+        area: "grid",
+        message: `${ep}: classic thumbnail is about to be set on a row with a verified grid tile — grid verification cleared so the next grid pass re-sets it.`,
+        ep,
+        runId,
+      });
+    }
     await setThumbnail(videoId, cover.bytes, supabase);
     await patchFinish(supabase, row.platform_post_id, {
       thumbnail_set_at: new Date().toISOString(),
@@ -682,6 +720,9 @@ async function verifyOne(
         message: `${ep}: finished and verified.`,
       });
     }
+    // The board sees it (spec 16 §6): the first time the finisher's result is
+    // visible anywhere Pausha looks. Never fails the verification it reflects.
+    await reflectFinishOnBoard(supabase, ep, runId);
     return true;
   }
 

@@ -55,9 +55,23 @@ language, read-back verification.
   Playwright storageState exported from a browser a human signed in with; this
   app never signs in to Google itself. Cookies go back to the row only after
   a run has seen Studio accept them.
-- **Phase 1 writes no Monday column.** It reads the Publishing board to find
-  an item and it sends notifications. `statusValue`/`updateItem` exist in
-  `src/lib/monday.ts` for Phase 2 and are unused.
+- **The app writes ONE Monday column: `Factory`** (since 2026-10-17; spec 16
+  §6, Pausha: "all actions that happen automatically are still reflected in
+  Monday boards"). `src/lib/board-reflect.ts` is the only caller of
+  `setFactory`; every write is by index and read back. `Status` is Pausha's:
+  Review → Queued is her flip, and Published is written only by the reconcile
+  phase on a read-back platform post id — never by the finisher, never by the
+  executor, never on an item that is not Queued. No other column is written
+  before Phase 3 (post ids, Cover tile).
+- **The Shorts-grid tile is set by the Mac's `studio_bot`, by decision**
+  (Christopher 2026-10-17, spec 16 §7). The `youtube.grid` cron is retired;
+  the route stays for manual runs. Do not re-add the cron or spend time on
+  Chromium-on-Vercel for an authenticated Google session; the off-Mac path,
+  if ever needed, is a hosted browser with a persistent profile.
+- **The order law is code** (`clearGridForReset`): the finisher never sets the
+  classic thumbnail on a row with a set or verified grid tile without clearing
+  the grid columns in the same step. A human reset of a `wait-for-human` row
+  does the same by hand (state → pending AND the grid columns → null/0).
 
 ## Conventions
 

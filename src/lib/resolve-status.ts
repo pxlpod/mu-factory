@@ -133,6 +133,37 @@ export async function resolveDone(
 }
 
 /**
+ * Clears the grid slot's verification so the next grid pass re-sets the tile.
+ *
+ * THE ORDER LAW (doc 12, 2026-09-10, proven on Ep007): `thumbnails.set` on the
+ * classic slot RESETS the Shorts-grid tile. So whenever the finisher is about
+ * to set the classic thumbnail on a row whose grid tile is already verified, it
+ * calls this in the same step — the grid columns go back to "never set", the
+ * Mac grid bot picks the row up on its next run, and the tile is re-proved
+ * from the public grid rather than assumed to have survived. This is the only
+ * writer that may NULL `grid_thumbnail_verified_at`; `resolveGridVerified` is
+ * the only one that may set it.
+ */
+export async function clearGridForReset(
+  supabase: MuClient,
+  platformPostId: string,
+  reason: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("youtube_finish")
+    .update({
+      grid_thumbnail_set_at: null,
+      grid_thumbnail_verified_at: null,
+      grid_thumbnail_distance: null,
+      grid_attempts: 0,
+      grid_next_attempt_at: null,
+      grid_error: reason.slice(0, 500),
+    })
+    .eq("platform_post_id", platformPostId);
+  if (error) throw new Error(`youtube_finish grid reset failed: ${error.message}`);
+}
+
+/**
  * `grid_thumbnail_verified_at`, if and only if the card the public Shorts grid
  * serves hashes within the threshold of our cover.
  *

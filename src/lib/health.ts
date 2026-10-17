@@ -1,13 +1,20 @@
 import { ALERTS, ALERT_CONDITIONS } from "@/config/alerts";
 import { MONDAY } from "@/config/monday";
 import { raiseAlert, resolveAlert } from "@/lib/alerts";
+import { backfillFinishedOnBoard } from "@/lib/board-reflect";
 import { requiredEnv } from "@/lib/config-check";
-import { createDriveClient, resolveFolders } from "@/lib/drive";
+import {
+  createDriveClient,
+  probeRoot,
+  resolveFolders,
+  serviceAccountEmail,
+} from "@/lib/drive";
 import { logEvent } from "@/lib/events";
 import { YoutubeDisconnectedError } from "@/lib/google/auth";
 import { beat, deadRoutes, readHeartbeats } from "@/lib/heartbeat";
 import { runHousekeeping } from "@/lib/housekeeping";
-import { checkBoard } from "@/lib/monday";
+import { checkBoard, listPublishingItems, type PublishingItem } from "@/lib/monday";
+import { runPreflight } from "@/lib/preflight";
 import { createServiceClient } from "@/lib/supabase";
 import { probeChannel } from "@/lib/youtube/client";
 
@@ -36,6 +43,8 @@ export async function runHealthCheck(): Promise<{
   results: ProbeResult[];
   dead: Array<{ route: string; minutesAgo: number }>;
   housekeeping: Awaited<ReturnType<typeof runHousekeeping>>;
+  reflection: { written: number; failed: number };
+  preflight: { checked: number; blocked: string[] };
 }> {
   const supabase = createServiceClient();
   const results: ProbeResult[] = [];
@@ -60,9 +69,13 @@ export async function runHealthCheck(): Promise<{
 
   results.push(
     await probe("Drive", async () => {
+      // Root FIRST, by id, so a rebuilt or unshared root says so in words
+      // (2026-10-03 → 2026-10-17: two weeks of "Covers not found under the
+      // root" when the root itself had changed). Then the three folders.
       const drive = createDriveClient();
-      const folders = await resolveFolders(drive);
-      return `root + Covers/yt resolved (${folders.coversYt.slice(0, 8)}…)`;
+      const root = await probeRoot(drive);
+      await resolveFolders(drive);
+      return `"${root.name}" (${root.id.slice(0, 8)}…) shared with ${serviceAccountEmail()}; Covers/yt, Covers, Finals resolved`;
     }),
   );
 
@@ -79,18 +92,33 @@ export async function runHealthCheck(): Promise<{
     }),
   );
 
+  let publishingItems: PublishingItem[] | null = null;
   results.push(
     await probe("Monday", async () => {
       const board = await checkBoard();
       if (!board.ok) {
         throw new Error(board.error ?? `missing ${board.missingColumns.join(", ")}`);
       }
-      return `Publishing board ${MONDAY.boards.publishing} intact (${board.boardName})`;
+      publishingItems = await listPublishingItems();
+      return `Publishing board ${MONDAY.boards.publishing} intact (${board.boardName}), ${publishingItems.length} items`;
     }),
   );
 
+  // Board reflection + pre-flight ride on the hourly read of the board
+  // (spec 16 §6 / §4.1). Both are no-ops when the board is unreadable — the
+  // Monday probe above has already gone red.
+  let reflection = { written: 0, failed: 0 };
+  let preflight = { checked: 0, blocked: [] as string[] };
+  if (publishingItems) {
+    reflection = await backfillFinishedOnBoard(supabase, publishingItems);
+    preflight = await runPreflight(supabase, publishingItems);
+  }
+
   const beats = await readHeartbeats(supabase);
-  const dead = deadRoutes(beats, ["youtube.sweep", "youtube.grid"]);
+  // `youtube.grid` is no longer a cron (2026-10-17): the Shorts-grid tile is
+  // set by the Mac's studio_bot, the one declared launchd job (spec 16 §7).
+  // The route stays for a manual run from /status; its silence is not a fault.
+  const dead = deadRoutes(beats, ["youtube.sweep"]);
 
   const failures = results.filter((r) => !r.ok);
   const ok = failures.length === 0 && dead.length === 0;
@@ -139,11 +167,18 @@ export async function runHealthCheck(): Promise<{
     }
   }
 
-  const consequence: Record<"youtube.sweep" | "youtube.grid", string> = {
+  const consequence: Record<"youtube.sweep", string> = {
     "youtube.sweep": "Published Shorts are not being finished.",
-    "youtube.grid": "Finished Shorts are not getting their Shorts-grid thumbnail.",
   };
-  for (const route of ["youtube.sweep", "youtube.grid"] as const) {
+  // The grid cron was retired 2026-10-17; close its dead-cron condition if one
+  // is still open so the last message about it is a ✅, not silence.
+  await resolveAlert({
+    supabase,
+    condition: ALERT_CONDITIONS.cronDead,
+    subject: "youtube.grid",
+    message: "The youtube.grid cron is retired; the Shorts-grid tile is set by the Mac's studio_bot.",
+  });
+  for (const route of ["youtube.sweep"] as const) {
     const stopped = dead.find((d) => d.route === route);
     if (stopped) {
       await raiseAlert({
@@ -176,6 +211,18 @@ export async function runHealthCheck(): Promise<{
         (dead.length ? `; dead: ${dead.map((d) => d.route).join(", ")}` : ""),
     });
   }
+  if (reflection.written || reflection.failed || preflight.blocked.length) {
+    await logEvent(supabase, {
+      level: reflection.failed || preflight.blocked.length ? "warn" : "info",
+      area: "board",
+      message:
+        `Board: ${reflection.written} Factory column(s) backfilled` +
+        (reflection.failed ? `, ${reflection.failed} write(s) failed` : "") +
+        (preflight.blocked.length
+          ? `; pre-flight: ${preflight.blocked.length} Queued item(s) due within 24 h with no post ids — ${preflight.blocked.join(", ")}`
+          : `; pre-flight: ${preflight.checked} Queued item(s) checked, none blocked`),
+    });
+  }
 
   await beat(
     "health",
@@ -184,7 +231,7 @@ export async function runHealthCheck(): Promise<{
     supabase,
   );
 
-  return { ok, results, dead, housekeeping };
+  return { ok, results, dead, housekeeping, reflection, preflight };
 }
 
 async function probe(

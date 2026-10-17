@@ -4,6 +4,7 @@ import { ZERNIO } from "@/config/zernio";
 import {
   createDriveClient,
   describe,
+  probeRoot,
   resolveFolders,
   serviceAccountEmail,
 } from "@/lib/drive";
@@ -135,25 +136,37 @@ async function driveLines(): Promise<CheckLine[]> {
     return [{ label: "Drive service account", ok: false, detail: describe(error) }];
   }
 
+  const drive = createDriveClient();
+  let root: { id: string; name: string };
   try {
-    const drive = createDriveClient();
+    root = await probeRoot(drive);
+  } catch (error) {
+    return [
+      { label: "Drive service account", ok: true, detail: email },
+      { label: "Drive root folder", ok: false, detail: describe(error) },
+    ];
+  }
+
+  try {
     const folders = await resolveFolders(drive);
     return [
       { label: "Drive service account", ok: true, detail: email },
       {
+        label: "Drive root folder",
+        ok: true,
+        detail: `"${root.name}" (${root.id}) is visible to the service account.`,
+      },
+      {
         label: "Drive folders",
         ok: true,
-        detail: `root ${folders.root.slice(0, 8)}…, Covers/yt ${folders.coversYt.slice(0, 8)}…`,
+        detail: `Covers/yt ${folders.coversYt.slice(0, 8)}…, Covers ${folders.coversIg.slice(0, 8)}…, Finals ${folders.finals.slice(0, 8)}…`,
       },
     ];
   } catch (error) {
     return [
       { label: "Drive service account", ok: true, detail: email },
-      {
-        label: "Drive folders",
-        ok: false,
-        detail: `${describe(error)} (is the MU root folder shared with ${email}?)`,
-      },
+      { label: "Drive root folder", ok: true, detail: `"${root.name}" (${root.id})` },
+      { label: "Drive folders", ok: false, detail: describe(error) },
     ];
   }
 }

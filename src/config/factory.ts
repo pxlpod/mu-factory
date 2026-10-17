@@ -78,6 +78,31 @@ export const DRIVE_FOLDERS = {
 } as const satisfies Record<string, readonly string[]>;
 
 // ---------------------------------------------------------------------------
+// The publishing calendar (decisions of record, doc 12)
+// ---------------------------------------------------------------------------
+
+/**
+ * When each kind of Publishing item posts, in `PUBLISH_TIMEZONE`. Video = the
+ * daily 9:16 episode on all four platforms (18:00 ET since launch 2026-08-24);
+ * Text = the Facebook text-lane post (09:00 ET since 2026-09-06). Stories ride
+ * 10 minutes after the video. The pre-flight check (health) and, from Phase 3,
+ * the publish executor both read these; nothing else hardcodes a slot.
+ */
+export const PUBLISH_TIMEZONE = "America/New_York" as const;
+export const PUBLISH_SLOTS = {
+  video: { hour: 18, minute: 0 },
+  text: { hour: 9, minute: 0 },
+  storyDelayMinutes: 10,
+} as const;
+
+/**
+ * A Queued item whose slot is this close and still has no post ids is a
+ * problem a human can still fix — so it is said out loud once (24 h cooldown)
+ * rather than discovered as a missed slot. Spec 16 §4.1.
+ */
+export const PREFLIGHT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
 // Runs
 // ---------------------------------------------------------------------------
 
@@ -105,4 +130,6 @@ export type EventArea =
   | "cover"
   | "health"
   | "import"
-  | "auth";
+  | "auth"
+  /** Writes to the Monday boards that reflect automatic actions (spec 16 §6). */
+  | "board";

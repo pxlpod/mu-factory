@@ -56,6 +56,17 @@ export const YOUTUBE = {
   coverRetryMs: 60 * 60 * 1000,
 
   /**
+   * "Video is private" right after publish is a TIMING MISS, not a condition
+   * (doc 12, 2026-09-10; Ep007 and Ep009 both read private for minutes after
+   * Zernio's upload and were public shortly after). A row younger than
+   * `privateGraceMs` is looked at again every `privateRetryMs` without
+   * consuming a finish attempt; older than that, a private video is a real
+   * state and the row waits for a human as before.
+   */
+  privateRetryMs: 5 * 60 * 1000,
+  privateGraceMs: 30 * 60 * 1000,
+
+  /**
    * dHash Hamming distance at or under which the thumbnail YouTube serves is
    * accepted as our cover. 64-bit hash; 14 bits allows for YouTube's own
    * re-encode, letterbox trimming and scaling while still rejecting a
