@@ -2,16 +2,22 @@ import { EPISODE_PATTERN, POST_KINDS, type PostKind } from "@/config/factory";
 import { ZERNIO, type ZernioPlatform } from "@/config/zernio";
 
 /**
- * Zernio client — read-only in Phase 1.
+ * Zernio client.
  *
  * COPIED FROM PHOTO-PUBLISHER'S CLIENT AND CUT TO WHAT MU NEEDS: the request
- * wrapper, the published-URL finder, and the post reader. The scheduling and
- * media-upload calls stay behind in photo-publisher until Phase 2 needs them.
+ * wrapper, the published-URL finder, the post reader, and — since Phase 3
+ * (2026-10-17) — the writes the publish executor makes: presign + upload,
+ * create a scheduled post, cancel one. The write shapes are `mu_post.py`'s,
+ * proven on every MU post since launch, not photo-publisher's (MU sends a
+ * local wall clock with `America/New_York`; both work, this one is ours).
  *
  * MU LAW 1 IS ENFORCED HERE, NOT AT THE CALL SITES. `listPublishedPosts`
  * always sends `profileId` from config; there is no parameter to leave it
- * out. The other profiles in this Zernio workspace are client work and this
- * app must never read them, even by accident, even for a count.
+ * out. Posts are created against account ids from config — never from an
+ * unfiltered `/accounts` list, which is how `mu_post.py` chose them and the
+ * one purview hole the executor does not inherit. The other profiles in this
+ * Zernio workspace are client work and this app must never read them, even
+ * by accident, even for a count.
  */
 
 export class ZernioError extends Error {
@@ -226,6 +232,106 @@ export async function probeProfile(): Promise<{ id: string; name: string }> {
     );
   }
   return { id, name };
+}
+
+// ---------------------------------------------------------------------------
+// Writes (Phase 3)
+// ---------------------------------------------------------------------------
+
+interface PresignResponse {
+  uploadUrl?: string;
+  publicUrl?: string;
+  key?: string;
+}
+
+/**
+ * Presign, PUT, return the public URL and key.
+ *
+ * THE PUT CARRIES NO AUTHORIZATION HEADER — the signature is in the URL, and
+ * a bearer token on a presigned upload is a 403 that reads like a credentials
+ * problem (photo-publisher). The object lives in temporary storage for 7 days
+ * (`PUBLISH.handoffWindowDays` is the consequence).
+ */
+export async function uploadMedia(opts: {
+  bytes: Buffer;
+  filename: string;
+  contentType: string;
+  uploadTimeoutMs: number;
+}): Promise<{ publicUrl: string; key: string }> {
+  const presigned = await request<PresignResponse>("/media/presign", {
+    method: "POST",
+    body: { filename: opts.filename, contentType: opts.contentType },
+  });
+  if (!presigned.uploadUrl || !presigned.publicUrl) {
+    throw new ZernioError("Zernio presign returned no uploadUrl/publicUrl");
+  }
+
+  const put = await fetch(presigned.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": opts.contentType },
+    body: new Uint8Array(opts.bytes),
+    signal: AbortSignal.timeout(opts.uploadTimeoutMs),
+  });
+  if (!put.ok) {
+    const body = await put.text().catch(() => "");
+    throw new ZernioError(
+      `Zernio media upload failed — ${put.status}: ${body.slice(0, 200)}`,
+      put.status,
+    );
+  }
+
+  return { publicUrl: presigned.publicUrl, key: presigned.key ?? presigned.publicUrl };
+}
+
+export interface CreatePostInput {
+  content: string;
+  mediaType: "video" | "image";
+  mediaUrl: string;
+  platform: ZernioPlatform;
+  accountId: string;
+  platformSpecificData?: Record<string, unknown>;
+  /** TikTok settings are ALSO sent top-level as `tiktokSettings` (doc 12, 2026-08-29). */
+  tiktokSettings?: Record<string, unknown>;
+  /** `YYYY-MM-DDTHH:mm:ss` wall clock in `timezone`. */
+  scheduledFor: string;
+  timezone: string;
+  metadata: { episode: string; kind: string; source: string };
+}
+
+/**
+ * One scheduled post on one platform. Returns Zernio's id (`_id` everywhere —
+ * doc 12 smoke test, 2026-08-17). `publishNow` is never sent: a post is
+ * scheduled because `scheduledFor` is present.
+ */
+export async function createScheduledPost(input: CreatePostInput): Promise<{ postId: string }> {
+  const leg: Record<string, unknown> = { platform: input.platform, accountId: input.accountId };
+  if (input.platformSpecificData) leg.platformSpecificData = { ...input.platformSpecificData };
+
+  const body: Record<string, unknown> = {
+    content: input.content,
+    mediaItems: [{ type: input.mediaType, url: input.mediaUrl }],
+    platforms: [leg],
+    scheduledFor: input.scheduledFor,
+    timezone: input.timezone,
+    metadata: input.metadata,
+  };
+  if (input.tiktokSettings) body.tiktokSettings = { ...input.tiktokSettings };
+
+  const created = await request<Record<string, unknown>>("/posts", { method: "POST", body });
+  const post = asRecord(created.post ?? created);
+  const postId = asString(post._id) ?? asString(post.id) ?? asString(created.id) ?? asString(created.postId);
+  if (!postId) throw new ZernioError(`posts.create returned no id: ${JSON.stringify(created).slice(0, 300)}`);
+  return { postId };
+}
+
+/** Withdraws a scheduled post. A 404 means it is already gone, which is the goal. */
+export async function cancelPost(postId: string): Promise<void> {
+  try {
+    await request(`/posts/${encodeURIComponent(postId)}`, { method: "DELETE" });
+  } catch (error) {
+    if (error instanceof ZernioError && error.status === 404) return;
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

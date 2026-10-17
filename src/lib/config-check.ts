@@ -1,5 +1,6 @@
 import { MEDIA_BUCKET, MU_SCHEMA } from "@/config/factory";
 import { MONDAY, alertFallbackItemId } from "@/config/monday";
+import { executorMode } from "@/config/publish";
 import { ZERNIO } from "@/config/zernio";
 import {
   createDriveClient,
@@ -63,6 +64,14 @@ export async function runConfigCheck(): Promise<CheckLine[]> {
   lines.push(await youtubeLine());
   lines.push(await studioLine());
   lines.push(await zernioLine());
+  lines.push({
+    label: "Publish executor",
+    ok: true,
+    detail:
+      executorMode() === "live"
+        ? "LIVE — Queued items are handed to Zernio every 10 minutes."
+        : "DRY RUN — every tick plans and writes nothing. Set PUBLISH_EXECUTOR_MODE=live in Vercel (and redeploy) to hand off for real.",
+  });
 
   return lines;
 }

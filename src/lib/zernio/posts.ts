@@ -65,7 +65,7 @@ export async function resolveEpisode(
 export async function applyPost(
   supabase: MuClient,
   post: ZernioPost,
-  source: Exclude<PostSource, "import">,
+  source: Exclude<PostSource, "import" | "executor">,
   runId: string | null = null,
 ): Promise<ApplyResult> {
   /**

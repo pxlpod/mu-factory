@@ -99,6 +99,28 @@ story). The Mac labels every post it schedules with that kind, and the app now
 copies the label onto the row. Without this file the database would refuse a
 story post.
 
+## What the fourth file does (2026-10-17, the publish executor)
+
+From this file on, the app itself hands episodes to Zernio — the job the
+weekly `mu_post.py` run on Pausha's Mac used to do. Two tables grow:
+
+- **`platform_posts`** gets the columns a hand-off needs: which Monday item it
+  came from, the exact instant it is scheduled for, which uploaded file it
+  points at, when it was handed off or withdrawn, how many attempts it took,
+  the last error, and a fingerprint of the copy that was sent (so a change on
+  the board can be noticed and the post re-made). Rows the app creates carry
+  `source = executor`.
+- **`media`** records a file's Zernio upload (one upload serves several
+  posts), learns the TikTok tail-card variant as a kind, and gains a `retained`
+  flag: covers are kept in the bucket as before, finals are hashed but not
+  kept here (Drive is the archive).
+
+Running it twice is harmless.
+
+**To apply it:** Supabase → project **mindless-mu** → **SQL Editor → + New
+query** → paste the whole of `20261017170000_publish_executor.sql` → **Run**.
+Expect "Success. No rows returned".
+
 ---
 
 ## Connecting the app

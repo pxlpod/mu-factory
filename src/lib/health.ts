@@ -118,7 +118,7 @@ export async function runHealthCheck(): Promise<{
   // `youtube.grid` is no longer a cron (2026-10-17): the Shorts-grid tile is
   // set by the Mac's studio_bot, the one declared launchd job (spec 16 §7).
   // The route stays for a manual run from /status; its silence is not a fault.
-  const dead = deadRoutes(beats, ["youtube.sweep"]);
+  const dead = deadRoutes(beats, ["youtube.sweep", "publish.tick"]);
 
   const failures = results.filter((r) => !r.ok);
   const ok = failures.length === 0 && dead.length === 0;
@@ -167,8 +167,9 @@ export async function runHealthCheck(): Promise<{
     }
   }
 
-  const consequence: Record<"youtube.sweep", string> = {
+  const consequence: Record<"youtube.sweep" | "publish.tick", string> = {
     "youtube.sweep": "Published Shorts are not being finished.",
+    "publish.tick": "Queued episodes are not being handed to Zernio.",
   };
   // The grid cron was retired 2026-10-17; close its dead-cron condition if one
   // is still open so the last message about it is a ✅, not silence.
@@ -178,7 +179,7 @@ export async function runHealthCheck(): Promise<{
     subject: "youtube.grid",
     message: "The youtube.grid cron is retired; the Shorts-grid tile is set by the Mac's studio_bot.",
   });
-  for (const route of ["youtube.sweep"] as const) {
+  for (const route of ["youtube.sweep", "publish.tick"] as const) {
     const stopped = dead.find((d) => d.route === route);
     if (stopped) {
       await raiseAlert({

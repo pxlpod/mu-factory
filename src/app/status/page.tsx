@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
 
+import { PUBLISH_SLOTS } from "@/config/factory";
+import { MONDAY } from "@/config/monday";
+import { PUBLISH, executorMode } from "@/config/publish";
 import { STUDIO, YOUTUBE } from "@/config/youtube";
 import { openAlerts } from "@/lib/alerts";
 import { ATTEMPT_POLICIES } from "@/lib/attempts";
@@ -8,11 +11,14 @@ import { runConfigCheck, type CheckLine } from "@/lib/config-check";
 import { recentEvents } from "@/lib/events";
 import { loadYoutubeCredentials, type YoutubeCredentials } from "@/lib/google/credentials";
 import { readHeartbeats } from "@/lib/heartbeat";
+import { listPublishingItems, type PublishingItem } from "@/lib/monday";
+import { slotInstant } from "@/lib/slots";
 import { createServiceClient } from "@/lib/supabase";
 import type {
   AlertRow,
   EventRow,
   HeartbeatRow,
+  PlatformPostRow,
   WebhookEventRow,
   YoutubeFinishRow,
 } from "@/types/db";
@@ -51,6 +57,9 @@ export default async function StatusPage({
   let finishes: YoutubeFinishRow[] = [];
   let events: EventRow[] = [];
   let webhooks: WebhookEventRow[] = [];
+  let queue: PublishingItem[] = [];
+  let legs: PlatformPostRow[] = [];
+  let queueError: string | null = null;
   let dataError: string | null = null;
 
   try {
@@ -74,8 +83,28 @@ export default async function StatusPage({
       .order("received_at", { ascending: false })
       .limit(10);
     webhooks = (hooks ?? []) as WebhookEventRow[];
+
+    const { data: legRows } = await supabase
+      .from("platform_posts")
+      .select("*")
+      .eq("source", "executor")
+      .is("cancelled_at", null)
+      .order("slot_at", { ascending: true })
+      .limit(200);
+    legs = (legRows ?? []) as PlatformPostRow[];
   } catch (error) {
     dataError = error instanceof Error ? error.message : String(error);
+  }
+
+  // The board read is separate so a Monday hiccup leaves the rest of the page up.
+  try {
+    const horizon = Date.now() + 14 * 24 * 3_600_000;
+    queue = (await listPublishingItems())
+      .filter((item) => item.statusIndex === MONDAY.publishingStatus.queued && item.date)
+      .filter((item) => itemSlot(item).getTime() > Date.now() - 24 * 3_600_000 && itemSlot(item).getTime() < horizon)
+      .sort((a, b) => itemSlot(a).getTime() - itemSlot(b).getTime());
+  } catch (error) {
+    queueError = error instanceof Error ? error.message : String(error);
   }
 
   const problemCount = events.filter((e) => e.level === "error").length;
@@ -88,8 +117,9 @@ export default async function StatusPage({
         <div>
           <h1 className="text-lg font-medium">MU Factory</h1>
           <p className="text-[var(--muted)]">
-            YouTube finisher. The sweep runs every fifteen minutes, the Shorts-grid
-            pass seven minutes after it; health hourly.
+            YouTube finisher every fifteen minutes; publish executor every ten
+            ({executorMode() === "live" ? "live" : "dry run"}); health hourly. The
+            Shorts-grid tile is set by the Mac bot.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -99,6 +129,8 @@ export default async function StatusPage({
             url="/api/youtube/sweep"
             primary
           />
+          <RunNowButton label="Run publish tick" busyLabel="Handing off…" url="/api/publish/tick" />
+          <RunNowButton label="Publish dry run" busyLabel="Planning…" url="/api/publish/tick?dry=1" />
           <RunNowButton label="Run grid pass" busyLabel="In Studio…" url="/api/youtube/grid" />
           <RunNowButton label="Run health check" busyLabel="Checking…" url="/api/health" />
         </div>
@@ -207,6 +239,84 @@ export default async function StatusPage({
             </ul>
           )}
         </div>
+      </Section>
+
+      <Section title={`Publishing queue (${queue.length} Queued, next 14 days)`}>
+        {queueError ? (
+          <p className="p-3 text-[var(--bad)]">Could not read the Publishing board: {queueError}</p>
+        ) : queue.length === 0 ? (
+          <p className="p-3 text-[var(--muted)]">
+            Nothing Queued on the Publishing board for the next fourteen days. The
+            executor hands an item off once its slot is within {PUBLISH.handoffWindowDays} days.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="text-[var(--muted)]">
+                <tr>
+                  <Th>Item</Th>
+                  <Th>Posts at</Th>
+                  <Th>Factory</Th>
+                  <Th>Cover</Th>
+                  <Th>On the board</Th>
+                  <Th>Executor legs</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {queue.map((item) => {
+                  const mine = legs.filter((l) => l.monday_item_id === item.id);
+                  const ids = [
+                    ["TT", item.ttPostId],
+                    ["IG", item.igPostId],
+                    ["YT", item.ytPostId],
+                    ["FB", item.fbPostId],
+                  ] as const;
+                  return (
+                    <tr key={item.id} className="border-t border-[var(--border)]">
+                      <Td>{item.name}</Td>
+                      <Td>
+                        <span title={itemSlot(item).toISOString()}>{formatTime(itemSlot(item).toISOString())}</span>
+                      </Td>
+                      <Td>
+                        <Tag
+                          text={factoryLabel(item.factoryIndex) ?? "—"}
+                          problem={item.factoryIndex === MONDAY.factory.needsYou || item.factoryIndex === MONDAY.factory.needsFiles}
+                        />
+                      </Td>
+                      <Td>
+                        {item.typeIndex === MONDAY.publishingType.text
+                          ? "text"
+                          : item.coverStatusIndex === MONDAY.coverStatus.approved
+                            ? "approved"
+                            : <span className="text-[var(--bad)]">not approved</span>}
+                        {item.hasCoverTile ? "" : <span className="text-[var(--muted)]"> · no tile</span>}
+                      </Td>
+                      <Td>
+                        {ids.map(([k, v]) => (
+                          <span key={k} className="mr-2" style={{ color: v ? "var(--ok)" : "var(--muted)" }}>
+                            {k} {v ? "✓" : "·"}
+                          </span>
+                        ))}
+                      </Td>
+                      <Td>
+                        {mine.length === 0 ? (
+                          <span className="text-[var(--muted)]">none yet</span>
+                        ) : (
+                          mine.map((l) => (
+                            <span key={l.id} className="mr-2 whitespace-nowrap">
+                              {l.platform}/{l.kind}{" "}
+                              <Tag text={l.status ?? "?"} problem={l.status === "wait-for-human" || l.status === "failed"} />
+                            </span>
+                          ))
+                        )}
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Section>
 
       <Section
@@ -495,6 +605,24 @@ function rowLabel(row: YoutubeFinishRow): { text: string; problem: boolean } {
     return { text: "grid: wait-for-human", problem: true };
   }
   return { text: "grid pending", problem: false };
+}
+
+function itemSlot(item: PublishingItem): Date {
+  return slotInstant(item.date, item.typeIndex === MONDAY.publishingType.text ? PUBLISH_SLOTS.text : PUBLISH_SLOTS.video);
+}
+
+function factoryLabel(index: number | null): string | null {
+  if (index === null) return null;
+  const names: Record<keyof typeof MONDAY.factory, string> = {
+    waiting: "Waiting",
+    needsFiles: "Needs files",
+    queuedInZernio: "Queued in Zernio",
+    live: "Live",
+    ytFinished: "YT finished",
+    needsYou: "Needs you",
+  };
+  const entry = (Object.entries(MONDAY.factory) as Array<[keyof typeof MONDAY.factory, number]>).find(([, i]) => i === index);
+  return entry ? names[entry[0]] : `label ${index}`;
 }
 
 function formatTime(iso: string): string {

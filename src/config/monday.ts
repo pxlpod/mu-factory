@@ -21,6 +21,8 @@ export const MONDAY = {
   apiVersion: "2025-10",
 
   requestTimeoutMs: 30_000,
+  /** A 5 MB cover PNG to `/v2/file`. */
+  fileUploadTimeoutMs: 120_000,
 
   boards: {
     publishing: "18426983206",
@@ -44,6 +46,14 @@ export const MONDAY = {
     status: "color_mm6at4nb",
     type: "color_mm6xxttp",
     coverStatus: "color_mm6mm3nw",
+    /** The copy of record, written by Claude at week-build and edited by Pausha on the board. */
+    ytTitle: "text_mm6a6vpv",
+    ytDescription: "long_text_mm6a1y0w",
+    ttCaption: "long_text_mm6aemvx",
+    /** One caption serves Instagram and the Facebook reel; for a Text item it is the post body. */
+    igFbCaption: "long_text_mm6aqt6y",
+    /** File column; the executor attaches the cover from Drive (§4.6). Appends — clear first. */
+    coverTile: "file_mm6mgrh3",
     ttPostId: "text_mm6aj8ba",
     igPostId: "text_mm6a3qqq",
     ytPostId: "text_mm6avbc9",
