@@ -175,7 +175,7 @@ Then press **Run sweep now** on `/status` and watch the Events section.
 | **Configuration** | One line per dependency, green or red. A red line names the fix. |
 | **YouTube connection** | Which channel is connected and since when. Reconnect here. |
 | **Cron heartbeats** | When `youtube.sweep`, `publish.tick` and `health` last ran (sweep every 15 min, publish tick every 10, health hourly; sweep or tick silent for 45 min → an alert). `youtube.grid` shows the last manual run only — it is no longer a cron; the Shorts-grid tile is set by the Mac's `studio_bot` (launchd 18:20 / 18:50 / 09:10 ET), whose log is `Renders/_studio_bot.log` in the MU hub folder. |
-| **Publishing queue** | Every `Queued` item for the next 14 days: its slot, Factory value, cover status, which post ids the board carries, and what the executor has done per leg (TikTok, IG, YT, FB reel, two stories; Text items: one FB post). A leg reading `wait-for-human` means read Events for the reason. The **Configuration** line *Publish executor* reads **DRY RUN** until `PUBLISH_EXECUTOR_MODE=live` is set in Vercel — in that state every tick plans and writes nothing. |
+| **Publishing queue** | Every `Queued` item for the next 14 days: its slot, Factory value, cover status, which post ids the board carries, and what the executor has done per leg (TikTok, IG, YT, FB reel, two stories; Text items: one FB post). A leg reading `wait-for-human` means read Events for the reason. The **Configuration** line *Publish executor* reads **DRY RUN** until `PUBLISH_EXECUTOR_MODE=live` is set in Vercel — in that state every tick plans, beats its heartbeat, and touches nothing at Zernio, Monday or the post tables; the plan appears in Events each time it changes. |
 | **YouTube finishes** | One row per YouTube post. `pending` → `verify-pending` → `grid pending` → `done`. `done` means BOTH the classic thumbnail/caption and the Shorts-grid card were read back. `wait-for-human` (or `grid: wait-for-human`) means read **Last error**. ✓ marks show what is set and what is verified; the **Shorts grid** column has its own pair plus the attempt count. |
 | **Webhooks** | The last 10 deliveries from Zernio. "not MU" in grey is a client-profile delivery, correctly ignored. |
 | **Events** | The last 50 things that happened, newest first. Red = error. |
@@ -183,7 +183,7 @@ Then press **Run sweep now** on `/status` and watch the Events section.
 **Run sweep now**, **Run grid pass**, **Run publish tick**, **Publish dry
 run** and **Run health check** call the same code the crons call, so pressing
 them proves the crons. **Publish dry run** is always safe: it reads the board
-and Drive, writes nothing, and shows the plan in Events. The grid pass takes
+and Drive, touches nothing at Zernio or Monday, and shows the plan in Events. The grid pass takes
 up to four minutes when it has work: a browser, Studio, and two minutes of
 watching the public grid.
 

@@ -50,9 +50,10 @@ import type { EpisodeRow, PlatformPostRow } from "@/types/db";
  * NEVER BACK-POST. A slot in the past is a human's problem to re-date, not a
  * reason to post now.
  *
- * `dryRun` plans everything and writes nothing — no uploads, no posts, no
- * board or database writes beyond the run row — and says what it would do.
- * That is how the first week is proven before the Mac script retires.
+ * `dryRun` plans everything and touches nothing at Zernio, Monday or the
+ * post/media tables. Its only traces are the run row, the heartbeat, and one
+ * Events line whenever the plan changes (`logDryPlan`). That is how the first
+ * week is proven before the Mac script retires.
  */
 
 export interface TickSummary {
@@ -159,14 +160,15 @@ export async function runPublishTick(opts: { dryRun?: boolean } = {}): Promise<T
       (summary.legsFailed ? `, ${summary.legsFailed} leg(s) failed` : "") +
       (summary.errors ? `, ${summary.errors} error(s)` : "");
 
-    if (!dryRun) {
-      await beat("publish.tick", summary.errors || summary.legsFailed ? "errors" : "ok", summary.message, supabase);
-    }
+    // The heartbeat records that the ROUTE ran, dry or not: a dry tick that
+    // left no beat would read as a dead cron within 45 minutes.
+    await beat("publish.tick", summary.errors || summary.legsFailed ? "errors" : "ok", summary.message, supabase);
+    if (dryRun) await logDryPlan(supabase, runId, summary);
   } catch (error) {
     summary.error = describe(error);
     summary.message = `Publish tick failed: ${summary.error}`;
     await logEvent(supabase, { level: "error", area: "publish", message: summary.message, runId });
-    if (!dryRun) await beat("publish.tick", "failed", summary.error, supabase);
+    await beat("publish.tick", "failed", summary.error, supabase);
   } finally {
     await supabase
       .from("runs")
@@ -175,6 +177,34 @@ export async function runPublishTick(opts: { dryRun?: boolean } = {}): Promise<T
   }
 
   return summary;
+}
+
+/**
+ * A dry tick's one visible trace. The plan goes to Events ONLY when it
+ * differs from the previous tick's — six ticks an hour saying the same thing
+ * would bury the fifty-line Events view — so a quiet week reads as a handful
+ * of lines, each the moment a live executor would have acted.
+ */
+async function logDryPlan(supabase: MuClient, runId: string, summary: TickSummary): Promise<void> {
+  const { data: previous } = await supabase
+    .from("runs")
+    .select("summary")
+    .eq("route", "publish.tick")
+    .not("finished_at", "is", null)
+    .neq("id", runId)
+    .order("started_at", { ascending: false })
+    .limit(1);
+  const previousPlan = ((previous?.[0]?.summary as { plan?: string[] } | null)?.plan ?? []).join("\n");
+  const plan = summary.plan.join("\n");
+  if (plan === previousPlan) return;
+
+  const body = summary.plan.length ? summary.plan.join(" · ") : "nothing to do";
+  await logEvent(supabase, {
+    level: "info",
+    area: "publish",
+    message: `DRY RUN — a live tick would now: ${body.slice(0, 1500)}${body.length > 1500 ? " …" : ""}`,
+    runId,
+  });
 }
 
 interface Ctx {

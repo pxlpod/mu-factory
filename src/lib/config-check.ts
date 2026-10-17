@@ -70,7 +70,7 @@ export async function runConfigCheck(): Promise<CheckLine[]> {
     detail:
       executorMode() === "live"
         ? "LIVE — Queued items are handed to Zernio every 10 minutes."
-        : "DRY RUN — every tick plans and writes nothing. Set PUBLISH_EXECUTOR_MODE=live in Vercel (and redeploy) to hand off for real.",
+        : "DRY RUN — every tick plans and touches nothing at Zernio or Monday; the plan is in Events. Set PUBLISH_EXECUTOR_MODE=live in Vercel (and redeploy) to hand off for real.",
   });
 
   return lines;
