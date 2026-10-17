@@ -7,7 +7,7 @@ import { runPublishTick } from "@/lib/publish/executor";
 /**
  * The publish executor's tick. Vercel Cron every ten minutes (GET,
  * CRON_SECRET), and the buttons on /status (POST, session cookie): "Run
- * publish tick" and "Dry run" (`?dry=1`), which plans and writes nothing.
+ * publish tick" and "Dry run" (`?dry=1`), which plans and touches nothing at Zernio or Monday.
  * Same handler either way.
  */
 

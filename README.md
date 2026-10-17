@@ -158,7 +158,7 @@ there would drop it and every query would return `PGRST106`.
 | `ZERNIO_WEBHOOK_SECRET` | Generated when you register `${APP_URL}/api/webhooks/zernio` at Zernio. |
 | `CRON_SECRET` | Any long random string: `openssl rand -hex 32`. Vercel Cron sends it as a bearer token. |
 | `APP_PASSWORD` | Your choice. The single password for `/status`. |
-| `PUBLISH_EXECUTOR_MODE` | Optional. `live` makes the publish tick hand off for real; unset or anything else is a DRY RUN that plans and writes nothing. Flip it in Vercel after a week of plans has matched the Mac. |
+| `PUBLISH_EXECUTOR_MODE` | Optional. `live` makes the publish tick hand off for real; unset or anything else is a DRY RUN: the tick touches nothing at Zernio or Monday and makes no post rows; it only records its plan in Events (when the plan changes) and its heartbeat. Flip it in Vercel after a week of plans has matched the Mac. |
 
 No `NEXT_PUBLIC_*` anywhere. Env is read lazily inside throwing getters, never
 at module top level. `.env.example` lists every name with its provenance.
@@ -284,8 +284,9 @@ The publish executor (spec 16 §4). Replaces the Mac's `mu_post.py`. Run lock
 `publish.tick`; heartbeat `publish.tick`; budget `PUBLISH.runBudgetMs`
 (270 s) so a Vercel kill never lands mid-upload. **DRY unless
 `PUBLISH_EXECUTOR_MODE=live`**, and dry on demand (`?dry=1`, the **Publish
-dry run** button): a dry tick reads everything, writes nothing, and returns
-its plan. Four steps, in order:
+dry run** button): a dry tick reads everything, touches nothing at Zernio, Monday or the
+post tables, beats its heartbeat, and puts its plan in Events whenever the
+plan differs from the previous tick's. Four steps, in order:
 
 1. **Reconcile** every active `platform_posts` row the executor made (status
    `scheduled`). If its item is gone or no longer `Queued`, or the copy hash

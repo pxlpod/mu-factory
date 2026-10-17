@@ -124,8 +124,9 @@ export const TEXT_LEGS: readonly LegSpec[] = [
 
 /**
  * The executor's switch. `PUBLISH_EXECUTOR_MODE=live` hands off for real;
- * anything else (including unset) runs every tick as a DRY RUN that plans and
- * writes nothing. Deployed dry on purpose: the first week is proven on /status
+ * anything else (including unset) runs every tick as a DRY RUN that plans,
+ * beats its heartbeat, logs the plan to Events when it changes, and touches
+ * nothing at Zernio, Monday or the post tables. Deployed dry on purpose: the first week is proven on /status
  * while `mu_post.py` still queues the real posts, and the switch is flipped
  * in Vercel once a week of plans has matched what the Mac did (spec 16 §8:
  * nothing is retired until its replacement has run clean for a week).

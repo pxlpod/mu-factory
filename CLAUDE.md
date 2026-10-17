@@ -73,7 +73,9 @@ language, read-back verification.
   the board carries no post ids for it (ids mean `mu_post.py` or a hand got
   there first — reflect *Queued in Zernio* and leave it). A passed slot is
   `publish.slot_missed`, never a post. `PUBLISH_EXECUTOR_MODE` unset = every
-  tick is a dry run that plans and writes nothing; `live` is flipped in
+  tick is a dry run that touches nothing at Zernio, Monday or the post
+  tables (it still beats `publish.tick` and logs its plan to Events when the
+  plan changes — a silent dry cron would read as dead); `live` is flipped in
   Vercel after a week of plans has matched the Mac (spec 16 §8). Do not add
   a publish-now path, a back-post path, or a second episode per tick without
   a decision of record.
@@ -224,7 +226,7 @@ language, read-back verification.
   NULL`.** A cancelled row stays as history; the re-made post is a new row.
 - **Covers are attached as a side-job, five per tick**, before the hand-off,
   so a Queued item carries its tile on the board as soon as the cover exists.
-  Dry mode skips this too — dry writes nothing, not even to Monday.
+  Dry mode skips this too — dry touches nothing on Monday.
 - **`attempts` for `zernio_handoff` is per leg** (`platform_posts.attempts`),
   cap 3, retry 10 min; a failure on one leg does not stop the others, and
   the next tick resumes the item at its remaining legs.
