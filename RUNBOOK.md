@@ -174,13 +174,16 @@ Then press **Run sweep now** on `/status` and watch the Events section.
 | **Needs you** | Open alerts. Each also went to Monday as a notification. Gone when resolved. |
 | **Configuration** | One line per dependency, green or red. A red line names the fix. |
 | **YouTube connection** | Which channel is connected and since when. Reconnect here. |
-| **Cron heartbeats** | When `youtube.sweep` and `health` last ran (sweep every 15 min, health hourly; silent for 45 min → an alert). `youtube.grid` shows the last manual run only — it is no longer a cron; the Shorts-grid tile is set by the Mac's `studio_bot` (launchd 18:20 / 18:50 / 09:10 ET), whose log is `Renders/_studio_bot.log` in the MU hub folder. |
+| **Cron heartbeats** | When `youtube.sweep`, `publish.tick` and `health` last ran (sweep every 15 min, publish tick every 10, health hourly; sweep or tick silent for 45 min → an alert). `youtube.grid` shows the last manual run only — it is no longer a cron; the Shorts-grid tile is set by the Mac's `studio_bot` (launchd 18:20 / 18:50 / 09:10 ET), whose log is `Renders/_studio_bot.log` in the MU hub folder. |
+| **Publishing queue** | Every `Queued` item for the next 14 days: its slot, Factory value, cover status, which post ids the board carries, and what the executor has done per leg (TikTok, IG, YT, FB reel, two stories; Text items: one FB post). A leg reading `wait-for-human` means read Events for the reason. The **Configuration** line *Publish executor* reads **DRY RUN** until `PUBLISH_EXECUTOR_MODE=live` is set in Vercel — in that state every tick plans and writes nothing. |
 | **YouTube finishes** | One row per YouTube post. `pending` → `verify-pending` → `grid pending` → `done`. `done` means BOTH the classic thumbnail/caption and the Shorts-grid card were read back. `wait-for-human` (or `grid: wait-for-human`) means read **Last error**. ✓ marks show what is set and what is verified; the **Shorts grid** column has its own pair plus the attempt count. |
 | **Webhooks** | The last 10 deliveries from Zernio. "not MU" in grey is a client-profile delivery, correctly ignored. |
 | **Events** | The last 50 things that happened, newest first. Red = error. |
 
-**Run sweep now**, **Run grid pass** and **Run health check** call the same
-code the crons call, so pressing them proves the crons. The grid pass takes
+**Run sweep now**, **Run grid pass**, **Run publish tick**, **Publish dry
+run** and **Run health check** call the same code the crons call, so pressing
+them proves the crons. **Publish dry run** is always safe: it reads the board
+and Drive, writes nothing, and shows the plan in Events. The grid pass takes
 up to four minutes when it has work: a browser, Studio, and two minutes of
 watching the public grid.
 
@@ -202,9 +205,12 @@ land on that episode's Publishing item; the rest land on **MU Factory alerts**.
 | `youtube.grid_stuck:<Ep>` | Three grid attempts and the public Shorts grid never showed the cover | Open the channel's Shorts tab and the video's edit page in Studio. If the grid card is right, set `grid_thumbnail_verified_at` and `grid_thumbnail_distance` on the row; if not, read `grid_error` (shown as "Grid:" in **Last error**), fix the cause, and set `grid_attempts` to 0. |
 | `studio.session_expired` | Studio no longer accepts the stored session (or none is stored) | On the Mac: `node studio_bot.mjs login && node studio_bot.mjs export`. Only matters for a manual grid run; the Mac bot has its own sign-in. |
 | `zernio.post_failed:<post>` | Zernio could not publish | Open the post in Zernio; the reason is there. |
-| `publish.blocked:<Ep>` | A Queued item posts within 24 h and has no post ids — approved on the board, never handed to Zernio | Queue it (until Phase 3: the weekly `mu_post.py` run), or move its date. The item's Factory column reads *Needs files* until then. Clears itself when ids appear. |
+| `publish.blocked:<Ep>` | A Queued item posts within 24 h and has no post ids — approved on the board, never handed to Zernio | While the executor is DRY: queue it (the weekly `mu_post.py` run) or move its date. Once LIVE this means the executor could not hand it off — look for a `publish.needs_files` or `publish.handoff_failed` on the same item. Clears itself when ids appear. |
+| `publish.needs_files:<Ep>` | The item is Queued and inside the six-day hand-off window, but Cover status is not Approved or a file is missing from Drive — the message names which | Approve the cover, or export the missing file into `Finals` / `Covers` with the exact filename. Nothing else: the next tick (ten minutes) picks it up. Factory reads *Needs files* meanwhile. |
+| `publish.slot_missed:<Ep>` | The item was Queued but its slot passed with nothing at Zernio | Nothing was posted and nothing is back-posted. Move its **Date** to a future day and it is handed off then. Factory reads *Needs you*. |
+| `publish.handoff_failed:<Ep>:<platform>/<kind>` | One leg failed at Zernio three times (upload or create) | Read **Last error** in Events. Fix the cause (usually a Zernio-side rejection of the file or caption), then set that `platform_posts` row's `status` back to `pending` and `attempts` to 0. The other legs are unaffected. |
 | `monday.write_failed:<Ep>` | The Factory column could not be written | The work itself is done; the board is behind. Check the Monday token on `/status`; the hourly backfill retries. |
-| `cron.dead:youtube.sweep` | No sweep for 45 minutes | Vercel → the project → **Cron Jobs**. Redeploy if they are missing. |
+| `cron.dead:youtube.sweep` / `cron.dead:publish.tick` | No sweep, or no publish tick, for 45 minutes | Vercel → the project → **Cron Jobs**. Redeploy if they are missing. |
 | `config.invalid:Drive` | The root folder is not visible to the service account, or a folder is missing | The message says which. A rebuilt root (Drive for desktop re-link, 2026-10-03) means: share the new folder with `mu-factory-drive@…` as Editor **and** put its id in `DRIVE_ROOT_FOLDER_ID`, then redeploy. |
 | `config.invalid:<probe>` | A dependency check failed | `/status` — the red line names it. |
 
@@ -213,6 +219,17 @@ read by Pausha: *Waiting* · *Needs files* · *Queued in Zernio* · *Live* ·
 *YT finished* · *Needs you*. Editing it by hand does nothing lasting — the next
 hourly check writes it again. `Status` is still hers (Review → Queued) and the
 app only ever writes Published to it, on a read-back post id (Phase 4).
+
+**What the executor writes on the board, and nothing else:** the four post-id
+columns (once, when Zernio accepts the post), the **Cover tile** file column
+(the IG cover, attached once), and **Cover status → No cover yet** when a
+Queued video has no `cover_<Ep>.png` in Drive. Captions and titles are read
+from the board, never written to it.
+
+**Changing a Queued item after hand-off** (copy, title, date): the next tick
+sees the difference, cancels the Zernio post, and re-makes it from the board.
+Flipping Status away from Queued cancels every leg. Nothing has to be undone
+by hand in Zernio.
 
 A cover that simply is not in Drive yet is **not** an alert. The row waits,
 looks again every hour, and says so in Events.
@@ -227,7 +244,8 @@ All in `src/config/`, all in git, all changed by asking Claude Code:
 - `zernio.ts` — profile and account ids, poll window, list page size
 - `monday.ts` — board and column ids, API version
 - `alerts.ts` — cooldown, cron-dead window, retention
-- `factory.ts` — filenames, Drive folder paths, run lock
+- `factory.ts` — filenames, Drive folder paths, run lock, publishing slots
+- `publish.ts` — hand-off window (6 days), episodes per tick (1), covers per tick, timeouts, attempt cap, the platform settings of record (TikTok/YouTube/Facebook/story), the Facebook disclosure line, and the DRY/LIVE switch (`PUBLISH_EXECUTOR_MODE`)
 
 ---
 
@@ -238,6 +256,7 @@ All in `src/config/`, all in git, all changed by asking Claude Code:
 - Nothing is marked `done` because a call returned 200. Only a read-back does that.
 - Nothing is marked grid-verified because Studio's Save button was pressed. Only the public grid card hashing to the cover does that.
 - Nobody signs in to Google from the server. The Studio session is exported from a browser a human signed in with, and only used and refreshed here.
-- No Monday column is written in Phase 1. Notifications only.
+- No Monday `Status` is written except Published on a read-back post id. `Factory`, the post-id columns, the Cover tile and *No cover yet* are the machine's; everything else on the board is Pausha's.
+- Nothing is handed to Zernio while `PUBLISH_EXECUTOR_MODE` is not `live`, and nothing is ever handed off twice or after its slot.
 - Nothing reads any Zernio profile other than `Default`.
 - Nothing asks Pausha to run anything.

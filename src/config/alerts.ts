@@ -58,6 +58,12 @@ export const ALERT_CONDITIONS = {
    * discovered as a missed slot (spec 16 §4.1, 2026-10-17).
    */
   publishBlocked: "publish.blocked",
+  /** A Queued item's slot passed with no post ids — never back-posted; a human re-dates it. */
+  publishSlotMissed: "publish.slot_missed",
+  /** Three hand-off attempts on one leg failed at Zernio. */
+  publishHandoffFailed: "publish.handoff_failed",
+  /** A hand-off cannot start: a file is missing in Drive or the cover is not Approved. Raised only inside the pre-flight window. */
+  publishNeedsFiles: "publish.needs_files",
   /** The Factory column could not be written; the work is done, the board is behind. */
   mondayWriteFailed: "monday.write_failed",
   cronDead: "cron.dead",

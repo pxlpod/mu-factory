@@ -88,7 +88,7 @@ export interface EpisodeRow {
   updated_at: string;
 }
 
-export type PostSource = "import" | "webhook" | "poll";
+export type PostSource = "import" | "webhook" | "poll" | "executor";
 
 export interface PlatformPostRow {
   id: string;
@@ -100,11 +100,26 @@ export interface PlatformPostRow {
   /** The platform's own id — for YouTube, the video id. */
   platform_post_id: string | null;
   published_url: string | null;
+  /**
+   * Zernio's status once it has one (`scheduled`, `published`, `failed`…).
+   * Executor rows start as `pending`; `cancelled` once withdrawn after a board
+   * change; `wait-for-human` after the hand-off attempts are used up.
+   */
   status: string | null;
   scheduled_for: string | null;
   published_at: string | null;
   source: PostSource;
   raw: unknown;
+  // --- executor columns (migration 2026-10-17) ---
+  monday_item_id: string | null;
+  slot_at: string | null;
+  media_id: string | null;
+  handed_off_at: string | null;
+  cancelled_at: string | null;
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+  copy_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -148,4 +163,12 @@ export interface MediaRow {
   sha256: string | null;
   bytes: number | null;
   mirrored_at: string | null;
+  // --- executor columns (migration 2026-10-17) ---
+  /** Bytes kept in the bucket (covers) vs hashed only (finals; Drive is the archive). */
+  retained: boolean;
+  /** For `final_tt_tail`: the sidecar JSON (`cover_ms`). */
+  meta: Record<string, unknown> | null;
+  zernio_key: string | null;
+  zernio_url: string | null;
+  zernio_uploaded_at: string | null;
 }

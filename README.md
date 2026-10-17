@@ -65,7 +65,19 @@ Violations are build failures, not preferences.
    is the machine's, written by index and read back; `Status` stays Pausha's
    (Review → Queued is her flip; Published is written only on a read-back
    platform post id, by the reconcile phase). `src/lib/board-reflect.ts` is
-   the one place that writes `Factory`.
+   the one place that writes `Factory`. The publish executor (Phase 3) adds
+   exactly three more writes, all of them records of what it did: the four
+   **post-id columns** (one per platform, written once per hand-off, read
+   back), the **Cover tile** file column (the IG cover, attached once), and
+   **Cover status → No cover yet** when a Queued video has no cover in Drive.
+   Nothing else on the board is the machine's.
+8. **Nothing posts twice, and nothing is back-posted.** The executor hands
+   off only a `Queued` item whose slot is in the future and within six days,
+   and only one with no post ids on it (ids mean someone else already queued
+   it). A slot that passes un-handed-off raises `publish.slot_missed` and is
+   left alone: move its Date forward and it goes then. The executor ships
+   **DRY** (`PUBLISH_EXECUTOR_MODE` unset): every tick plans and writes
+   nothing until the switch is flipped to `live` in Vercel.
 
 ## Deploy
 
@@ -81,6 +93,7 @@ src/config/zernio.ts           base URL, MU profile + account ids, webhook event
 src/config/youtube.ts          scope, per-run cap, attempt counts, dHash threshold, the blank SRT
 src/config/monday.ts           board ids, column ids, API version, alert fallback item
 src/config/alerts.ts           cooldown, cron-dead window, retention, condition keys
+src/config/publish.ts          the executor: hand-off window, per-tick caps, platform settings, legs, DRY/LIVE switch
 src/lib/supabase.ts            the one service-role client, pinned to schema `mu`
 src/lib/auth.ts                APP_PASSWORD → HMAC cookie `mu_session`
 src/lib/events.ts              logEvent — the only writer to `events`
@@ -90,6 +103,10 @@ src/lib/attempts.ts            retry policy for finish / verify / cover, in one 
 src/lib/monday.ts              gql, paginated items_page, notify, checkBoard, setFactory (the one column write)
 src/lib/board-reflect.ts       Factory column: reflect a finish, hourly backfill (spec 16 §6)
 src/lib/preflight.ts           Queued + due within 24 h + no post ids → publish.blocked (spec 16 §4.1)
+src/lib/slots.ts               slot instants and Zernio wall-clock strings, one timezone
+src/lib/publish/executor.ts    the tick: reconcile → attach covers → missed slots → hand off one episode
+src/lib/publish/legs.ts        item → the Zernio posts it means (copy from the board), copy hash
+src/lib/publish/media.ts       Drive → (bucket for covers) → Zernio upload, one upload per file per episode
 src/lib/drive.ts               service-account Drive, folder paths by name, read-only
 src/lib/google/auth.ts         the ONLY OAuth2 builder; consent URL, code exchange, token rotation
 src/lib/google/credentials.ts  `mu.credentials` rows for `youtube` and `google:state`
@@ -100,14 +117,14 @@ src/lib/studio.ts              the exported Studio session (mu.credentials), the
 src/lib/resolve-status.ts      the ONLY code that changes `youtube_finish.state`
 src/lib/media.ts               cover mirror Drive → storage, sha256 read-back, 2 MB refusal
 src/lib/dhash.ts               64-bit dHash + Hamming, in memory only
-src/lib/zernio/client.ts       fetch wrapper, list/get posts (profile-scoped), URL finder
+src/lib/zernio/client.ts       fetch wrapper, list/get posts (profile-scoped), URL finder, upload, create/cancel scheduled post
 src/lib/zernio/posts.ts        applyPost — one path for webhook and poll; episode resolution
 src/lib/zernio/events.ts       what happens to a delivery after 200
 src/lib/health.ts              hourly probes, cron-dead, housekeeping
 src/lib/config-check.ts        the red/green lines on /status; requiredEnv()
 src/app/status                 the only page
 src/app/google/{connect,callback}   the OAuth dance (non-/api)
-src/app/api/{youtube/sweep,youtube/grid,health,webhooks/zernio}
+src/app/api/{youtube/sweep,youtube/grid,publish/tick,health,webhooks/zernio}
 supabase/migrations/           `<UTC timestamp>_<name>.sql` + README.md
 scripts/                       import-publish-queue, check-drive, check-youtube, check-studio, backfill-covers
 ```
@@ -141,6 +158,7 @@ there would drop it and every query would return `PGRST106`.
 | `ZERNIO_WEBHOOK_SECRET` | Generated when you register `${APP_URL}/api/webhooks/zernio` at Zernio. |
 | `CRON_SECRET` | Any long random string: `openssl rand -hex 32`. Vercel Cron sends it as a bearer token. |
 | `APP_PASSWORD` | Your choice. The single password for `/status`. |
+| `PUBLISH_EXECUTOR_MODE` | Optional. `live` makes the publish tick hand off for real; unset or anything else is a DRY RUN that plans and writes nothing. Flip it in Vercel after a week of plans has matched the Mac. |
 
 No `NEXT_PUBLIC_*` anywhere. Env is read lazily inside throwing getters, never
 at module top level. `.env.example` lists every name with its provenance.
@@ -260,6 +278,57 @@ thumbnails from being finished.
    an `events` row with area `grid`; returns
    `{checked, uploaded, verified, waiting, errors}`.
 
+### `GET /api/publish/tick` — cron `*/10 * * * *`, `maxDuration 300`
+
+The publish executor (spec 16 §4). Replaces the Mac's `mu_post.py`. Run lock
+`publish.tick`; heartbeat `publish.tick`; budget `PUBLISH.runBudgetMs`
+(270 s) so a Vercel kill never lands mid-upload. **DRY unless
+`PUBLISH_EXECUTOR_MODE=live`**, and dry on demand (`?dry=1`, the **Publish
+dry run** button): a dry tick reads everything, writes nothing, and returns
+its plan. Four steps, in order:
+
+1. **Reconcile** every active `platform_posts` row the executor made (status
+   `scheduled`). If its item is gone or no longer `Queued`, or the copy hash
+   (content + title + slot, from the board) has changed, the Zernio post is
+   **cancelled** and the row marked `cancelled_at`; the next tick re-makes it
+   from the board. An item already `Published`, or whose slot has passed, is
+   left alone.
+2. **Attach covers** (§4.6): up to five Queued video items with no Cover
+   tile get `cover_<Ep>.png` from Drive attached to the file column (cleared
+   first — Monday appends). A Queued video with no cover in Drive at all has
+   Cover status set to *No cover yet*.
+3. **Missed slots**: a Queued item with no post ids whose slot passed in the
+   last seven days raises `publish.slot_missed` and `Factory → Needs you`.
+   Nothing is back-posted. Move the Date forward and it goes then.
+4. **Hand off one episode** (`PUBLISH.episodesPerTick`): the earliest Queued
+   item whose slot is in the future and within six days (Zernio temp media
+   lives seven). Skipped with `Factory → Queued in Zernio` if the board
+   already carries post ids. The gate is **Cover status = Approved** (video
+   items) **and every file in Drive** — `MU_<Ep>_FINAL_916.mp4`, `_tt.mp4`,
+   `_tt_tail.mp4` + `.json`, `cover_<Ep>.png`, `cover_<Ep>.jpg` (the
+   finisher's, which must exist before the Short publishes); the text lane
+   needs `cover_fb_<Ep>.png`. Short of the gate → `Factory → Needs files`,
+   `publish.needs_files:<Ep>`, and a `/status` line naming what is missing.
+   Through it: each file is uploaded to Zernio once (reused by every leg;
+   redone after six days), then one `createScheduledPost` per leg — TikTok
+   (tail variant, `video_cover_timestamp_ms` from the sidecar), Instagram
+   (FINAL + IG cover as thumbnail), YouTube (FINAL, title capped at 100,
+   `containsSyntheticMedia`), Facebook reel (HEAD bake, disclosure line),
+   IG + FB stories (IG cover, +10 min); a Text item is one Facebook post
+   with `cover_fb` and the disclosure line. Every post carries
+   `metadata {episode, kind, source: "mu-factory"}` so the webhook resolves
+   it. Each success writes the platform's post-id column on the board and a
+   `platform_posts` row (`source: executor`, `slot_at`, `copy_hash`,
+   `handed_off_at`). A leg failing three times → `wait-for-human`,
+   `publish.handoff_failed:<Ep>:<platform>/<kind>`, `Factory → Needs you`.
+   All legs scheduled → `Factory → Queued in Zernio` and `publish.blocked` /
+   `publish.needs_files` resolved.
+
+Copy is the board's: YT title / YT description / TikTok caption / IG-FB
+caption columns of the item; the reel reuses the IG-FB caption and YT title;
+stories carry the episode's question. The disclosure line is appended to
+every Facebook post idempotently and never typed into the board.
+
 ### `GET /api/health` — cron hourly, `maxDuration 120`
 
 Required env present · Supabase reachable (counts `episodes`) · **Drive root
@@ -270,7 +339,7 @@ resolves `youtube.disconnected`) · Monday `checkBoard(Publishing)` including
 the `Factory` column · **board reflection backfill** (every `done` finish row
 whose item does not yet read *YT finished*) · **pre-flight** (Queued, due
 within 24 h, no post ids → `publish.blocked:<Ep>` + `Factory → Needs files`)
-· `youtube.sweep` silent > 45 min after it has ever run → `cron.dead:<route>`
+· `youtube.sweep` or `publish.tick` silent > 45 min after it has ever run → `cron.dead:<route>`
 · housekeeping (prune `events` and `webhook_events` older than 60 days).
 Heartbeat `health`.
 
@@ -281,8 +350,11 @@ when it was exported and last refreshed) · YouTube connection with **Connect
 Google** · heartbeats · open alerts · the `youtube_finish` table (ep, video,
 state, attempts, language/caption/thumbnail set + verified flags, distance,
 Shorts-grid set + verified flags and distance, last error) · retry policy ·
-last 10 webhooks · last 50 events · **Run sweep now**, **Run grid pass** and
-**Run health check** buttons that POST to the same routes the crons call.
+**Publishing queue** (every Queued item in the next 14 days: slot, Factory,
+cover status, board post ids, executor legs) · last 10 webhooks · last 50
+events · **Run sweep now**, **Run grid pass**, **Run publish tick**,
+**Publish dry run** and **Run health check** buttons that POST to the same
+routes the crons call.
 `/` redirects to `/status`.
 
 The State column says **`done` only when both slots are verified.** A row
@@ -300,8 +372,10 @@ often than every 24 h while it persists, one ✅ on resolve. Conditions:
 `youtube.finish_stuck:<Ep>`, `youtube.verify_failed:<Ep>`,
 `youtube.cover_too_large:<Ep>`, `youtube.grid_stuck:<Ep>`,
 `studio.session_expired`, `zernio.post_failed:<post>`,
-`publish.blocked:<Ep>` (Text items: `<Ep>-text`), `monday.write_failed:<Ep>`,
-`cron.dead:youtube.sweep`, `config.invalid:<probe>`.
+`publish.blocked:<Ep>` (Text items: `<Ep>-text`), `publish.needs_files:<Ep>`,
+`publish.slot_missed:<Ep>`, `publish.handoff_failed:<Ep>:<platform>/<kind>`,
+`monday.write_failed:<Ep>`, `cron.dead:youtube.sweep`, `cron.dead:publish.tick`,
+`config.invalid:<probe>`.
 
 ### Scripts (Christopher's, one-time, `npx tsx`)
 
@@ -315,8 +389,8 @@ often than every 24 h while it persists, one ✅ on resolve. Conditions:
 
 ## Not built
 
-Publishing, TikTok/IG/Facebook finishing, analytics — the phases of spec 16.
-The only Monday column written is `Factory`. No video is ever uploaded or
-processed here. Signing in to Studio: the session is exported once from a
+TikTok/IG/Facebook finishing, the webhook-driven Published flip and analytics
+— Phases 4–5 of spec 16. No video is ever processed here: the executor moves
+bytes from Drive to Zernio untouched. Signing in to Studio: the session is exported once from a
 browser a human signed in with (`studio_bot.mjs` on the Mac); this app only
 uses and refreshes it.

@@ -186,6 +186,18 @@ export interface PublishingItem {
   igPostId: string;
   ytPostId: string;
   fbPostId: string;
+  ytTitle: string;
+  ytDescription: string;
+  ttCaption: string;
+  igFbCaption: string;
+  /** True when the Cover tile file column holds at least one file. */
+  hasCoverTile: boolean;
+}
+
+/** The post-id column for a platform, as the board carries them. */
+export function postIdColumn(platform: "tiktok" | "instagram" | "youtube" | "facebook"): string {
+  const c = MONDAY.publishingColumns;
+  return { tiktok: c.ttPostId, instagram: c.igPostId, youtube: c.ytPostId, facebook: c.fbPostId }[platform];
 }
 
 /** The label index inside a status column's JSON value, or null when blank. */
@@ -237,6 +249,11 @@ export async function listPublishingItems(): Promise<PublishingItem[]> {
     c.igPostId,
     c.ytPostId,
     c.fbPostId,
+    c.ytTitle,
+    c.ytDescription,
+    c.ttCaption,
+    c.igFbCaption,
+    c.coverTile,
   ]);
 
   return items.map((item) => {
@@ -259,8 +276,24 @@ export async function listPublishingItems(): Promise<PublishingItem[]> {
       igPostId: text[c.igPostId] ?? "",
       ytPostId: text[c.ytPostId] ?? "",
       fbPostId: text[c.fbPostId] ?? "",
+      ytTitle: text[c.ytTitle] ?? "",
+      ytDescription: text[c.ytDescription] ?? "",
+      ttCaption: text[c.ttCaption] ?? "",
+      igFbCaption: text[c.igFbCaption] ?? "",
+      hasCoverTile: hasFiles(value[c.coverTile]),
     };
   });
+}
+
+/** A file column's value is `{"files":[…]}`; empty or `{}` when it holds nothing. */
+function hasFiles(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    const parsed = JSON.parse(value) as { files?: unknown[] };
+    return Array.isArray(parsed.files) && parsed.files.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** The Video item for an episode (Text items share the EP value and end in "(text)"). */
@@ -407,6 +440,116 @@ export async function notify(
 
 export function mondayConfigured(): boolean {
   return Boolean(process.env.MONDAY_API_TOKEN);
+}
+
+// ---------------------------------------------------------------------------
+// Executor writes (Phase 3, spec 16 §4.3 / §4.6): post ids, the cover tile,
+// Cover status → Awaiting review. Status itself is never written here.
+// ---------------------------------------------------------------------------
+
+/** One column's current `text` and `value` on one item. */
+export async function readColumn(
+  itemId: string,
+  columnId: string,
+): Promise<{ text: string; value: string | null }> {
+  const data = await gql<{
+    items: Array<{ column_values: Array<{ id: string; text: string | null; value: string | null }> }> | null;
+  }>(
+    `query ($ids: [ID!], $columns: [String!]) {
+       items (ids: $ids) { column_values (ids: $columns) { id text value } }
+     }`,
+    { ids: [itemId], columns: [columnId] },
+  );
+  const column = data.items?.[0]?.column_values?.[0];
+  return { text: (column?.text ?? "").trim(), value: column?.value ?? null };
+}
+
+/**
+ * Writes a text column and reads it back. Used for the four post-id columns:
+ * a Zernio post id that is accepted and kept nowhere would leave the board
+ * saying "not queued" about a post that exists.
+ */
+export async function setTextColumn(
+  itemId: string,
+  columnId: string,
+  value: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await updateItem(MONDAY.boards.publishing, itemId, { [columnId]: value });
+    const back = await readColumn(itemId, columnId);
+    if (back.text !== value.trim()) {
+      return { ok: false, error: `text write did not read back (wanted "${value}", got "${back.text}")` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Cover status → the given label id (only `awaitingReview` is ever written by the app). */
+export async function setCoverStatus(
+  itemId: string,
+  labelId: number,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await updateItem(MONDAY.boards.publishing, itemId, {
+      [MONDAY.publishingColumns.coverStatus]: statusValue(labelId),
+    });
+    const back = statusIndexOf((await readColumn(itemId, MONDAY.publishingColumns.coverStatus)).value);
+    return back === labelId ? { ok: true } : { ok: false, error: `Cover status did not read back (got ${back})` };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Uploads a file into the Cover tile column, clearing it first.
+ *
+ * `add_file_to_column` APPENDS (photo-publisher's three-masters lesson, and
+ * doc 12's "W3 items show the v3 tile twice"), so the column is cleared and
+ * then written. Multipart to `/v2/file`, the only Monday endpoint that is not
+ * plain GraphQL-over-JSON. The returned asset id is the read-back.
+ */
+export async function setCoverTile(
+  itemId: string,
+  filename: string,
+  bytes: Buffer,
+  contentType: string,
+): Promise<{ ok: boolean; assetId?: string; error?: string }> {
+  const column = MONDAY.publishingColumns.coverTile;
+  try {
+    await updateItem(MONDAY.boards.publishing, itemId, { [column]: { clear_all: true } });
+
+    const form = new FormData();
+    form.append(
+      "query",
+      `mutation ($file: File!) { add_file_to_column (item_id: ${itemId}, column_id: "${column}", file: $file) { id } }`,
+    );
+    form.append("map", JSON.stringify({ image: "variables.file" }));
+    form.append("image", new Blob([new Uint8Array(bytes)], { type: contentType }), filename);
+
+    const res = await fetch(`${MONDAY.api}/file`, {
+      method: "POST",
+      headers: { Authorization: token(), "API-Version": MONDAY.apiVersion },
+      body: form,
+      signal: AbortSignal.timeout(MONDAY.fileUploadTimeoutMs),
+    });
+    const json = (await res.json()) as {
+      data?: { add_file_to_column?: { id?: string } };
+      errors?: Array<{ message: string }>;
+      error_message?: string;
+    };
+    if (!res.ok || json.errors?.length || json.error_message) {
+      throw new MondayError(
+        json.errors?.map((e) => e.message).join("; ") ?? json.error_message ?? `HTTP ${res.status}`,
+      );
+    }
+    const assetId = json.data?.add_file_to_column?.id;
+    if (!assetId) return { ok: false, error: "upload returned no asset id" };
+    return { ok: true, assetId };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // ---------------------------------------------------------------------------

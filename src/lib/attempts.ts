@@ -1,3 +1,4 @@
+import { PUBLISH } from "@/config/publish";
 import { STUDIO, YOUTUBE } from "@/config/youtube";
 
 /**
@@ -23,7 +24,12 @@ import { STUDIO, YOUTUBE } from "@/config/youtube";
  * when they are reached.
  */
 
-export type Operation = "youtube_finish" | "youtube_verify" | "youtube_grid" | "cover_fetch";
+export type Operation =
+  | "youtube_finish"
+  | "youtube_verify"
+  | "youtube_grid"
+  | "cover_fetch"
+  | "zernio_handoff";
 
 export interface AttemptPolicy {
   /** Consecutive failures before automatic retrying changes behaviour. */
@@ -94,6 +100,22 @@ export const ATTEMPT_POLICIES: Record<Operation, AttemptPolicy> = {
       "A missing cover is not an error — Pausha may simply not have produced " +
       "it yet. The row stays pending and is looked at hourly; a warn line on " +
       "/status says so. Nothing alerts, because nothing is broken.",
+  },
+
+  zernio_handoff: {
+    maxAttempts: PUBLISH.handoffAttempts,
+    atCap: "wait-for-human",
+    retryMs: PUBLISH.handoffRetryMs,
+    manualRetry:
+      "Read the leg's last error on /status. Fix the cause (usually the file in Drive " +
+      "or a Zernio account), then set the platform_posts row's status back to pending " +
+      "and attempts to 0, or ask Claude Code to.",
+    rationale:
+      "A presign, an upload or a posts.create that fails three times ten minutes " +
+      "apart is Zernio refusing something specific — a media URL it cannot " +
+      "fetch, a disconnected account, a field it no longer accepts. The other " +
+      "legs of the episode are unaffected and keep their posts; this one waits " +
+      "for a person, and the item's Factory column says Needs you.",
   },
 };
 

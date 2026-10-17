@@ -55,14 +55,33 @@ language, read-back verification.
   Playwright storageState exported from a browser a human signed in with; this
   app never signs in to Google itself. Cookies go back to the row only after
   a run has seen Studio accept them.
-- **The app writes ONE Monday column: `Factory`** (since 2026-10-17; spec 16
-  §6, Pausha: "all actions that happen automatically are still reflected in
-  Monday boards"). `src/lib/board-reflect.ts` is the only caller of
-  `setFactory`; every write is by index and read back. `Status` is Pausha's:
-  Review → Queued is her flip, and Published is written only by the reconcile
-  phase on a read-back platform post id — never by the finisher, never by the
-  executor, never on an item that is not Queued. No other column is written
-  before Phase 3 (post ids, Cover tile).
+- **The app's Monday writes are records of what it did, never instructions.**
+  `Factory` (since 2026-10-17; spec 16 §6, Pausha: "all actions that happen
+  automatically are still reflected in Monday boards") — `src/lib/board-reflect.ts`
+  is the only caller of `setFactory`; every write is by index and read back.
+  The executor (Phase 3) adds the four **post-id columns** (once per
+  hand-off, read back), the **Cover tile** file column (attached once), and
+  **Cover status → No cover yet** (only when Drive has no `cover_<Ep>.png`;
+  never Approved, never Awaiting review). `Status` is Pausha's: Review →
+  Queued is her flip, and Published is written only by the reconcile phase on
+  a read-back platform post id — never by the finisher, never by the executor,
+  never on an item that is not Queued. Captions and titles are READ from the
+  board and never written to it.
+- **The executor hands off once, forward only, and ships DRY.** A Queued item
+  is handed to Zernio only when its slot is in the future and within
+  `PUBLISH.handoffWindowDays` (6; Zernio temp media lives 7), and only when
+  the board carries no post ids for it (ids mean `mu_post.py` or a hand got
+  there first — reflect *Queued in Zernio* and leave it). A passed slot is
+  `publish.slot_missed`, never a post. `PUBLISH_EXECUTOR_MODE` unset = every
+  tick is a dry run that plans and writes nothing; `live` is flipped in
+  Vercel after a week of plans has matched the Mac (spec 16 §8). Do not add
+  a publish-now path, a back-post path, or a second episode per tick without
+  a decision of record.
+- **A hand-off can be withdrawn only by the board.** Every executor row keeps
+  `copy_hash` (content + title + slot from the board); the reconcile step
+  cancels the Zernio post and re-makes it when the hash changes, when Status
+  leaves Queued, or when the item is gone. Nothing in Zernio is edited in
+  place, and nothing is cancelled for a reason the board does not show.
 - **The Shorts-grid tile is set by the Mac's `studio_bot`, by decision**
   (Christopher 2026-10-17, spec 16 §7). The `youtube.grid` cron is retired;
   the route stays for manual runs. Do not re-add the cron or spend time on
@@ -178,6 +197,37 @@ language, read-back verification.
   `outputFileTracingIncludes` for the grid route only. The binary inflates
   into /tmp once per warm instance; graphics are off. Function CPU is set in
   the dashboard (Standard, 1 vCPU / 2 GB, is enough), never in `vercel.json`.
+
+## Decisions taken for the publish executor (2026-10-17, spec 16 §4)
+
+- **Copy comes from the board, nothing else.** YT title / YT description /
+  TikTok caption / IG-FB caption are the Publishing item's columns; the FB
+  reel reuses IG-FB caption + YT title (`mu_post.py`'s fallbacks — the board
+  never carried more); stories carry `episodes.question`. An empty column is
+  a leg that cannot be built (`wait-for-human` after three tries), not a
+  guess.
+- **Finals are not retained.** `media` rows for `final*` kinds record sha256,
+  bytes, Drive id and `retained = false`; the bytes live only inside the
+  invocation. Covers are kept in the bucket as the finisher already did.
+  Drive is the archive; a second one was not asked for.
+- **One Zernio upload per file per episode**, recorded on the `media` row
+  (`zernio_key/url/uploaded_at`), reused by every leg, redone after six days
+  or when the Drive file's bytes change.
+- **The TikTok leg sends no image URL.** The tail card is
+  `video_cover_timestamp_ms` from the `_tt_tail.json` sidecar; an image URL
+  overrides it and gets dropped (doc 12, 2026-09-10). The timestamp is NOT in
+  `copy_hash` — it is machine-derived and would cancel the post every tick.
+- **`cover_<Ep>.jpg` is in the YouTube leg's gate** although the executor
+  never sends it: the law (doc 12, 2026-09-08) is that the finisher's cover
+  exists before the Short publishes.
+- **`platform_posts` unique on `(ep, platform, kind) WHERE cancelled_at IS
+  NULL`.** A cancelled row stays as history; the re-made post is a new row.
+- **Covers are attached as a side-job, five per tick**, before the hand-off,
+  so a Queued item carries its tile on the board as soon as the cover exists.
+  Dry mode skips this too — dry writes nothing, not even to Monday.
+- **`attempts` for `zernio_handoff` is per leg** (`platform_posts.attempts`),
+  cap 3, retry 10 min; a failure on one leg does not stop the others, and
+  the next tick resumes the item at its remaining legs.
 
 ## Checking things by hand (Christopher only)
 
