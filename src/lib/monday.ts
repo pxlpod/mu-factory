@@ -77,9 +77,13 @@ export function textValue(value: string | null): string {
   return value ?? "";
 }
 
-/** Status columns are written as `{ index }`, never `{ label }`. */
-export function statusValue(index: number): { index: number } {
-  return { index };
+/**
+ * Status columns are written as `{ index }`, never `{ label }` — and the
+ * number is the label's ID (the key of the column's labels map), not its
+ * display position. See `MONDAY.publishingStatus` for why that matters.
+ */
+export function statusValue(labelId: number): { index: number } {
+  return { index: labelId };
 }
 
 export async function updateItem(
@@ -168,9 +172,13 @@ export interface PublishingItem {
   ep: string;
   /** `YYYY-MM-DD` from the Date column's JSON value, or "" when unset. */
   date: string;
-  /** Status label INDEX, or null when blank. Compare with `MONDAY.publishingStatus`. */
+  /**
+   * The status column's `index` field — which is the LABEL ID, not the display
+   * position (see the note in config/monday.ts). Null when blank. Compare
+   * with `MONDAY.publishingStatus`.
+   */
   statusIndex: number | null;
-  /** Type label index; null (blank) means Video — the pre-2026-09-05 items carry no Type. */
+  /** Type label id; null (blank) means Video — the pre-2026-09-05 items carry no Type. */
   typeIndex: number | null;
   coverStatusIndex: number | null;
   factoryIndex: number | null;

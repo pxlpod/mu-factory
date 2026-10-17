@@ -103,7 +103,11 @@ language, read-back verification.
   stop and wait for a human at their caps; a missing cover backs off hourly
   forever because nothing is broken.
 - **Monday API version is tracked in config** (`2025-10`), not pinned to an
-  old one. Status columns, when Phase 2 writes them, go by index.
+  old one. Status columns are written as `{index: N}` where **N is the label's
+  ID, not its display position** — the two differ on every column whose labels
+  were reordered or hand-created (Publishing "Queued" = id 9 at position 8;
+  the Factory column's ids are 17/0/9/1/3/2). `src/config/monday.ts` holds
+  ids only. Learned the hard way 2026-10-17 16:00Z (21 failed writes).
 - **Env is read lazily** inside a throwing getter, never at module top level.
   `requiredEnv()` in `config-check.ts` is the one list; health and `/status`
   both read it.
