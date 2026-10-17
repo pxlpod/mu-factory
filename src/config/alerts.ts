@@ -52,6 +52,14 @@ export const ALERT_CONDITIONS = {
   studioSessionExpired: "studio.session_expired",
   /** Zernio reported a post or platform failure. */
   zernioPostFailed: "zernio.post_failed",
+  /**
+   * A Queued Publishing item is due within 24 h and has no post ids — approved
+   * on the board but never handed to Zernio. Said once, a day ahead, instead of
+   * discovered as a missed slot (spec 16 §4.1, 2026-10-17).
+   */
+  publishBlocked: "publish.blocked",
+  /** The Factory column could not be written; the work is done, the board is behind. */
+  mondayWriteFailed: "monday.write_failed",
   cronDead: "cron.dead",
   configInvalid: "config.invalid",
 } as const;

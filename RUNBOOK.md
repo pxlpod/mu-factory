@@ -174,7 +174,7 @@ Then press **Run sweep now** on `/status` and watch the Events section.
 | **Needs you** | Open alerts. Each also went to Monday as a notification. Gone when resolved. |
 | **Configuration** | One line per dependency, green or red. A red line names the fix. |
 | **YouTube connection** | Which channel is connected and since when. Reconnect here. |
-| **Cron heartbeats** | When `youtube.sweep`, `youtube.grid` and `health` last ran. Sweep every 15 min, grid pass 7 min after it, health hourly. Silent for 45 min → an alert. |
+| **Cron heartbeats** | When `youtube.sweep` and `health` last ran (sweep every 15 min, health hourly; silent for 45 min → an alert). `youtube.grid` shows the last manual run only — it is no longer a cron; the Shorts-grid tile is set by the Mac's `studio_bot` (launchd 18:20 / 18:50 / 09:10 ET), whose log is `Renders/_studio_bot.log` in the MU hub folder. |
 | **YouTube finishes** | One row per YouTube post. `pending` → `verify-pending` → `grid pending` → `done`. `done` means BOTH the classic thumbnail/caption and the Shorts-grid card were read back. `wait-for-human` (or `grid: wait-for-human`) means read **Last error**. ✓ marks show what is set and what is verified; the **Shorts grid** column has its own pair plus the attempt count. |
 | **Webhooks** | The last 10 deliveries from Zernio. "not MU" in grey is a client-profile delivery, correctly ignored. |
 | **Events** | The last 50 things that happened, newest first. Red = error. |
@@ -200,11 +200,19 @@ land on that episode's Publishing item; the rest land on **MU Factory alerts**.
 | `youtube.finish_stuck:<Ep>` | Three attempts failed at YouTube | Read **Last error**. Fix the cause, set state back to `pending`. |
 | `youtube.verify_failed:<Ep>` | The read-back never matched after two hours | Open the video in YouTube Studio. If the thumbnail and captions look right, set the row to `done` (with both verified timestamps); if not, set it to `pending`. |
 | `youtube.grid_stuck:<Ep>` | Three grid attempts and the public Shorts grid never showed the cover | Open the channel's Shorts tab and the video's edit page in Studio. If the grid card is right, set `grid_thumbnail_verified_at` and `grid_thumbnail_distance` on the row; if not, read `grid_error` (shown as "Grid:" in **Last error**), fix the cause, and set `grid_attempts` to 0. |
-| `studio.session_expired` | Studio no longer accepts the stored session (or none is stored) | On the Mac: `node studio_bot.mjs login && node studio_bot.mjs export`. The next grid pass resolves the alert by itself. No video attempt was used up. |
+| `studio.session_expired` | Studio no longer accepts the stored session (or none is stored) | On the Mac: `node studio_bot.mjs login && node studio_bot.mjs export`. Only matters for a manual grid run; the Mac bot has its own sign-in. |
 | `zernio.post_failed:<post>` | Zernio could not publish | Open the post in Zernio; the reason is there. |
+| `publish.blocked:<Ep>` | A Queued item posts within 24 h and has no post ids — approved on the board, never handed to Zernio | Queue it (until Phase 3: the weekly `mu_post.py` run), or move its date. The item's Factory column reads *Needs files* until then. Clears itself when ids appear. |
+| `monday.write_failed:<Ep>` | The Factory column could not be written | The work itself is done; the board is behind. Check the Monday token on `/status`; the hourly backfill retries. |
 | `cron.dead:youtube.sweep` | No sweep for 45 minutes | Vercel → the project → **Cron Jobs**. Redeploy if they are missing. |
-| `cron.dead:youtube.grid` | No grid pass for 45 minutes | Same place. If the sweep is alive and only the grid is dead, check the function's CPU setting (step 6, item 5) and its logs for a browser launch error. |
+| `config.invalid:Drive` | The root folder is not visible to the service account, or a folder is missing | The message says which. A rebuilt root (Drive for desktop re-link, 2026-10-03) means: share the new folder with `mu-factory-drive@…` as Editor **and** put its id in `DRIVE_ROOT_FOLDER_ID`, then redeploy. |
 | `config.invalid:<probe>` | A dependency check failed | `/status` — the red line names it. |
+
+**The `Factory` column on the Publishing board** is written by the app and
+read by Pausha: *Waiting* · *Needs files* · *Queued in Zernio* · *Live* ·
+*YT finished* · *Needs you*. Editing it by hand does nothing lasting — the next
+hourly check writes it again. `Status` is still hers (Review → Queued) and the
+app only ever writes Published to it, on a read-back post id (Phase 4).
 
 A cover that simply is not in Drive yet is **not** an alert. The row waits,
 looks again every hour, and says so in Events.

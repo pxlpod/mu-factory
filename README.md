@@ -22,6 +22,17 @@ browser with a session Christopher exports once from his Mac, uploads the same
 cover, and then **reads the public grid back** and hashes the card. Nothing
 here calls that done because Save was pressed.
 
+**Since 2026-10-17 the app also writes ONE Monday column, `Factory`** (spec
+`16_Factory-Migration-Spec.md` §6, in the MU hub folder): a verified finish
+shows as *YT finished* on the episode's Publishing item, and a Queued item due
+within 24 h with no post ids shows as *Needs files* and raises an alert a day
+ahead. The migration spec is the plan of record for moving the rest of
+publishing off Pausha's Mac; this README describes what is live.
+
+**The Shorts-grid cron is retired (2026-10-17).** The tile is set by the Mac's
+`studio_bot` launchd job — the one declared Mac exception (spec 16 §7). The
+`/api/youtube/grid` route stays for a manual run from `/status`.
+
 **Operating it: [RUNBOOK.md](RUNBOOK.md).** Agent notes and the laws:
 [CLAUDE.md](CLAUDE.md).
 
@@ -49,6 +60,12 @@ Violations are build failures, not preferences.
    gesture or nothing. Scripts are Christopher's one-time tools.
 6. **Every failure gets a `/status` line or a Monday notification.**
    `console.*` is not a surface.
+7. **Every automatic action gets a board write** (Pausha, 2026-10-17: "so I
+   can see what's happening"). The `Factory` column on the Publishing board
+   is the machine's, written by index and read back; `Status` stays Pausha's
+   (Review → Queued is her flip; Published is written only on a read-back
+   platform post id, by the reconcile phase). `src/lib/board-reflect.ts` is
+   the one place that writes `Factory`.
 
 ## Deploy
 
@@ -70,7 +87,9 @@ src/lib/events.ts              logEvent — the only writer to `events`
 src/lib/heartbeat.ts           beat / deadRoutes
 src/lib/alerts.ts              raiseAlert / resolveAlert, 24 h cooldown, Monday notifications
 src/lib/attempts.ts            retry policy for finish / verify / cover, in one table
-src/lib/monday.ts              gql, paginated items_page, notify, checkBoard
+src/lib/monday.ts              gql, paginated items_page, notify, checkBoard, setFactory (the one column write)
+src/lib/board-reflect.ts       Factory column: reflect a finish, hourly backfill (spec 16 §6)
+src/lib/preflight.ts           Queued + due within 24 h + no post ids → publish.blocked (spec 16 §4.1)
 src/lib/drive.ts               service-account Drive, folder paths by name, read-only
 src/lib/google/auth.ts         the ONLY OAuth2 builder; consent URL, code exchange, token rotation
 src/lib/google/credentials.ts  `mu.credentials` rows for `youtube` and `google:state`
@@ -162,29 +181,42 @@ Same handler for `POST` from the status button. Run lock via `runs`.
      `youtube.cover_too_large:<Ep>`. Not in Drive yet → stay `pending`, look
      again in an hour, warn line only.
    - b. `videos.list` — must exist, public or unlisted. Not found →
-     `wait-for-human`.
+     `wait-for-human`. **Private on a row under 30 min old = publish lag**
+     (Ep007, Ep009): looked at again every 5 min, no attempt used; private on
+     an older row → `wait-for-human`.
    - c. `snippet.defaultLanguage !== "en"` → `videos.update` with the
      existing title/categoryId/description/tags + `defaultLanguage: "en"`.
    - d. `captions.list` — a non-`asr` `en` track already there → record it;
      else `captions.insert` (`{videoId, language: "en", name: "English",
      isDraft: false}`, `application/x-subrip`, the one-cue U+2800 SRT).
-   - e. `thumbnails.set` with the cover's bytes.
+   - e. `thumbnails.set` with the cover's bytes. **Order law:** if the row's
+     Shorts-grid tile is already set or verified, the grid columns are cleared
+     in the same step (`clearGridForReset`) — the classic thumbnail resets the
+     grid tile (doc 12, 2026-09-10), so the grid bot must set it again.
    - f. state → `verify-pending`, attempts reset.
    Three failed attempts → `wait-for-human` + alert `youtube.finish_stuck:<Ep>`.
 3. **Verify** `verify-pending` rows: `captions.list` must show the standard
    `en` track; the thumbnail YouTube serves (`snippet.thumbnails.maxres`, then
    `high`) is downloaded, letterbox-trimmed, dHashed (9×8 greyscale) and
    compared with the cover — Hamming ≤ 14 passes. Both → `done`, alerts for
-   that episode resolved. Not yet → wait 15 min. Eight looks → `wait-for-human`
-   + alert `youtube.verify_failed:<Ep>` carrying the distance.
+   that episode resolved, **and the episode's Publishing item gets
+   `Factory → YT finished`** (read back; a failed write is
+   `monday.write_failed:<Ep>` and the hourly backfill retries). Not yet → wait
+   15 min. Eight looks → `wait-for-human` + alert `youtube.verify_failed:<Ep>`
+   carrying the distance.
 4. Heartbeat `youtube.sweep`; every outcome is an `events` row; returns
    `{polled, finished, verified, waiting, errors}`.
 
-### `GET /api/youtube/grid` — cron `7,22,37,52 * * * *`, `maxDuration 300`
+### `GET /api/youtube/grid` — **no longer a cron** (retired 2026-10-17), `maxDuration 300`
 
-Same handler for `POST` from the status button. Run lock via `runs`
-(`youtube.grid`). Seven minutes after each sweep, so a row the sweep just
-verified is picked up on the next tick rather than the one after.
+The route stays for a manual run from the status button (`POST`, run lock via
+`runs`, `youtube.grid`). It was a cron at `7,22,37,52 * * * *` from 2026-09-10
+to 2026-10-17 and never completed a row on Vercel (Chromium died on every
+attempt — `/tmp` starvation under `@sparticuz/chromium`), while the Mac's
+`studio_bot` set every tile. Decision of record (spec 16 §7, Christopher
+2026-10-17): the grid tile is the one declared Mac job; do not sink more time
+into an authenticated Google session in a serverless browser. Its silence is
+no longer a `cron.dead` condition. What follows describes the route as built.
 
 **Its own route, not a fourth pass of the sweep**, because one row is a
 browser launch, a Studio page, an upload and up to two minutes of polling —
@@ -230,11 +262,16 @@ thumbnails from being finished.
 
 ### `GET /api/health` — cron hourly, `maxDuration 120`
 
-Required env present · Supabase reachable (counts `episodes`) · Drive root +
-`Covers/yt` resolvable · YouTube `channels.list(mine)` (raises / resolves
-`youtube.disconnected`) · Monday `checkBoard(Publishing)` · `youtube.sweep`
-or `youtube.grid` silent > 45 min after it has ever run → `cron.dead:<route>` ·
-housekeeping (prune `events` and `webhook_events` older than 60 days).
+Required env present · Supabase reachable (counts `episodes`) · **Drive root
+reachable by id and visible to the service account** (a rebuilt or unshared
+root says so in words — the 2026-10-03 failure mode), then `Covers/yt`,
+`Covers`, `Finals` resolvable · YouTube `channels.list(mine)` (raises /
+resolves `youtube.disconnected`) · Monday `checkBoard(Publishing)` including
+the `Factory` column · **board reflection backfill** (every `done` finish row
+whose item does not yet read *YT finished*) · **pre-flight** (Queued, due
+within 24 h, no post ids → `publish.blocked:<Ep>` + `Factory → Needs files`)
+· `youtube.sweep` silent > 45 min after it has ever run → `cron.dead:<route>`
+· housekeeping (prune `events` and `webhook_events` older than 60 days).
 Heartbeat `health`.
 
 ### `/status` (session) and `/login`
@@ -263,7 +300,8 @@ often than every 24 h while it persists, one ✅ on resolve. Conditions:
 `youtube.finish_stuck:<Ep>`, `youtube.verify_failed:<Ep>`,
 `youtube.cover_too_large:<Ep>`, `youtube.grid_stuck:<Ep>`,
 `studio.session_expired`, `zernio.post_failed:<post>`,
-`cron.dead:youtube.sweep`, `cron.dead:youtube.grid`, `config.invalid:<probe>`.
+`publish.blocked:<Ep>` (Text items: `<Ep>-text`), `monday.write_failed:<Ep>`,
+`cron.dead:youtube.sweep`, `config.invalid:<probe>`.
 
 ### Scripts (Christopher's, one-time, `npx tsx`)
 
@@ -277,8 +315,8 @@ often than every 24 h while it persists, one ✅ on resolve. Conditions:
 
 ## Not built
 
-Publishing, TikTok/IG/Facebook finishing, Monday column writes, analytics.
-Phase 1 reads Monday and never writes a column. No video is ever uploaded or
+Publishing, TikTok/IG/Facebook finishing, analytics — the phases of spec 16.
+The only Monday column written is `Factory`. No video is ever uploaded or
 processed here. Signing in to Studio: the session is exported once from a
 browser a human signed in with (`studio_bot.mjs` on the Mac); this app only
 uses and refreshes it.
