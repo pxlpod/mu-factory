@@ -53,32 +53,43 @@ export const MONDAY = {
   },
 
   /**
-   * Status label INDEXES on the Publishing board (read back from the board
-   * 2026-10-17). Written by index, never label — label text is editable.
+   * Status LABEL IDS on the Publishing board (read back 2026-10-17).
+   *
+   * 🛑 THE NUMBER MONDAY CALLS `index` IS THE LABEL'S ID, NOT ITS DISPLAY
+   * POSITION. A status column's stored value is `{"index": <label id>}` and a
+   * write of `{"index": N}` means "the label whose id is N" — the display
+   * order (`labels[].index` in board info) is a different number that happens
+   * to match on boards whose labels were never reordered or recreated. On the
+   * Publishing board "Queued" is id 9 at position 8 and "Published" id 10 at
+   * position 9; on the Factory column the ids were chosen for their colours
+   * (17 = grey, 0 = orange, 9 = yellow, 1 = green, 3 = blue, 2 = red) and
+   * bear no relation to position. The first health run after PR #6
+   * (2026-10-17 16:00Z) wrote positions and got "label does not exist in
+   * column" 21 times; this is the fix. Every value below is a label ID.
    */
   publishingStatus: {
     review: 3,
-    draft: 7,
+    draft: 8,
     /** Pausha's approval. The only value that authorises a hand-off. */
-    queued: 8,
+    queued: 9,
     /** The system's flip, only on a read-back platform post id (reconcile phase). */
-    published: 9,
+    published: 10,
   },
-  publishingType: { video: 0, text: 1 },
+  publishingType: { video: 3, text: 4 },
   coverStatus: { awaitingReview: 0, approved: 1, fixQuestion: 2, noCoverYet: 3 },
 
   /**
-   * The Factory column's labels, by index. Pausha approved the six words on
-   * 2026-10-17 ("These are fine"); the words may change on the board, the
-   * indexes may not.
+   * The Factory column's labels, by LABEL ID (see the note above). Pausha
+   * approved the six words on 2026-10-17 ("These are fine"); the words may
+   * change on the board, the ids may not.
    */
   factory: {
-    waiting: 0,
-    needsFiles: 1,
-    queuedInZernio: 2,
-    live: 3,
-    ytFinished: 4,
-    needsYou: 5,
+    waiting: 17,
+    needsFiles: 0,
+    queuedInZernio: 9,
+    live: 1,
+    ytFinished: 3,
+    needsYou: 2,
   },
 
   /** Video Performance board columns. Named now; used from Phase 2. */
