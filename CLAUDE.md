@@ -200,6 +200,17 @@ language, read-back verification.
   into /tmp once per warm instance; graphics are off. Function CPU is set in
   the dashboard (Standard, 1 vCPU / 2 GB, is enough), never in `vercel.json`.
 
+- **A bulk finisher reset is rationed to ~15 rows a day** (learned 2026-10-17
+  22:45Z). YouTube's quota is 10,000 units/day; one finish is ~450 units
+  (`captions.insert` 400) plus ~51 per verify pass, so 33 reset rows blew the
+  quota two-thirds through, every later sweep failed with `quotaExceeded`
+  and burned an attempt, and the hourly health probe raised
+  `config.invalid:YouTube` until the 07:00Z reset. The nightly load (one
+  Short) is nowhere near the limit. When resetting many rows by hand, set
+  `next_attempt_at` on the overflow to after 07:30Z, or reset in batches of
+  15 on consecutive days. A `quotaExceeded` error should not consume an
+  attempt — not yet coded; add it in `finish.ts` before the next bulk reset.
+
 ## Decisions taken for the publish executor (2026-10-17, spec 16 §4)
 
 - **Copy comes from the board, nothing else.** YT title / YT description /
