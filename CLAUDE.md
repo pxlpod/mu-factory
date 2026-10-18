@@ -211,6 +211,18 @@ language, read-back verification.
   15 on consecutive days. A `quotaExceeded` error should not consume an
   attempt — not yet coded; add it in `finish.ts` before the next bulk reset.
 
+- **Grid read-back sees only the first screen of the Shorts tab** — both
+  `readGridCard` here and the Mac bot's `gridImage` query the DOM without
+  scrolling, so an older Short's card is never found and its tile reads
+  "card not found" forever, even when Studio saved it (2026-10-18: 31
+  uploaded, 10 verified, the 21 older ones all "not found"; Pausha confirmed
+  every tile by eye). A `grid: wait-for-human` on an episode older than the
+  first page is therefore a blind read, not a missing tile: check the public
+  tab by eye and set `grid_thumbnail_verified_at` + `grid_thumbnail_distance`
+  by hand, noting "by eye" in `grid_error`. Fix, when it matters: scroll the
+  tab until the card appears, or fetch `i.ytimg.com/vi/<id>/sardefault.jpg`
+  directly instead of the DOM.
+
 ## Decisions taken for the publish executor (2026-10-17, spec 16 §4)
 
 - **Copy comes from the board, nothing else.** YT title / YT description /
